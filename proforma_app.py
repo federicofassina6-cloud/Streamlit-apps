@@ -87,6 +87,50 @@ def load_products():
         pass
     return []
 
+def load_customers():
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/customers",
+        headers=HEADERS,
+        params={"select": "id,company_name,contact_name,email,phone,address,city,zip,country,notes",
+                "order": "company_name.asc"}
+    )
+    try:
+        data = response.json()
+        if isinstance(data, list):
+            return data
+    except:
+        pass
+    return []
+
+def save_customer(company_name, contact_name, email, phone, address, city, zip_code, country, notes):
+    # Check if customer already exists by company name
+    check = requests.get(
+        f"{SUPABASE_URL}/rest/v1/customers",
+        headers=HEADERS,
+        params={"company_name": f"eq.{company_name}", "select": "id"}
+    )
+    try:
+        existing = check.json()
+        if isinstance(existing, list) and len(existing) > 0:
+            return  # already exists, skip
+    except:
+        pass
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/customers",
+        headers=HEADERS,
+        json={
+            "company_name": company_name,
+            "contact_name": contact_name,
+            "email": email,
+            "phone": phone,
+            "address": address,
+            "city": city,
+            "zip": zip_code,
+            "country": country,
+            "notes": notes
+        }
+    )
+
 def save_product(description, unit_price_client, unit_price_reseller, category):
     response = requests.post(
         f"{SUPABASE_URL}/rest/v1/products",
@@ -101,10 +145,15 @@ def save_product(description, unit_price_client, unit_price_reseller, category):
     return response.status_code in [200, 201]
 
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # LOAD PRODUCTS FROM SUPABASE
 # ─────────────────────────────────────────────
 if "products_db" not in st.session_state:
     st.session_state.products_db = load_products()
+
+# Load customers from Supabase (cached per session)
+if "customers_db" not in st.session_state:
+    st.session_state.customers_db = load_customers()
 
 PRODUCTS = st.session_state.products_db
 
@@ -295,24 +344,69 @@ formatted_date = selected_date.strftime('%d/%m/') + "\u2019" + year_2digit
 
 # ── 2. CLIENT ──
 st.subheader("2. Client")
+
+# Customer picker
+customers = st.session_state.customers_db
+customer_names = ["— new customer —"] + [
+    f"{c.get('company_name', '')} ({c.get('contact_name', '')})" for c in customers
+]
+col_cust, col_refresh = st.columns([5, 1])
+with col_cust:
+    selected_customer_idx = st.selectbox(
+        "Pick existing customer or fill in manually below",
+        range(len(customer_names)),
+        format_func=lambda x: customer_names[x],
+        key="customer_picker"
+    )
+with col_refresh:
+    st.write("")
+    if st.button("🔄", help="Reload customers from database"):
+        st.session_state.customers_db = load_customers()
+        st.rerun()
+
+# Auto-fill if customer selected
+if selected_customer_idx > 0:
+    cust = customers[selected_customer_idx - 1]
+    default_salutation = "Mr."
+    default_full_name  = cust.get("contact_name", "")
+    default_company    = cust.get("company_name", "")
+    default_address    = cust.get("address", "")
+    default_zip        = cust.get("zip", "")
+    default_city       = cust.get("city", "")
+    default_region     = ""
+    default_country    = cust.get("country", "")
+else:
+    default_salutation = "Mr."
+    default_full_name  = ""
+    default_company    = ""
+    default_address    = ""
+    default_zip        = ""
+    default_city       = ""
+    default_region     = ""
+    default_country    = ""
+
 col1, col2 = st.columns([1, 3])
 with col1:
-    salutation = st.selectbox("Salutation", ["Mr.", "Ms.", "Dr.", "Messrs."])
+    salutation = st.selectbox("Salutation", ["Mr.", "Ms.", "Dr.", "Messrs."],
+                              index=["Mr.", "Ms.", "Dr.", "Messrs."].index(default_salutation))
 with col2:
-    full_name = st.text_input("Contact Full Name", placeholder="e.g. John Smith")
+    full_name = st.text_input("Contact Full Name", value=default_full_name,
+                              placeholder="e.g. John Smith")
 
-company = st.text_input("Company Name", placeholder="e.g. Vitrex s.r.o.")
-address = st.text_input("Address", placeholder="e.g. Zeyerova 1334")
+company = st.text_input("Company Name", value=default_company,
+                        placeholder="e.g. Vitrex s.r.o.")
+address = st.text_input("Address", value=default_address,
+                        placeholder="e.g. Zeyerova 1334")
 
 col3, col4, col5 = st.columns(3)
 with col3:
-    zip_code = st.text_input("Zip", placeholder="337 01")
+    zip_code = st.text_input("Zip", value=default_zip, placeholder="337 01")
 with col4:
-    city = st.text_input("City", placeholder="Shenzhen")
+    city = st.text_input("City", value=default_city, placeholder="Shenzhen")
 with col5:
-    region = st.text_input("Region", placeholder="(optional)")
+    region = st.text_input("Region", value=default_region, placeholder="(optional)")
 
-country = st.text_input("Country", placeholder="e.g. China")
+country = st.text_input("Country", value=default_country, placeholder="e.g. China")
 
 # ── 3. CURRENCY ──
 st.subheader("3. Currency")
@@ -631,6 +725,22 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         buffer.seek(0)
 
         save_proforma(proforma_number, company, grand_total, currency)
+
+        # Save customer to Supabase if new (not already in DB)
+        if company.strip():
+            save_customer(
+                company_name=company,
+                contact_name=full_name,
+                email="",
+                phone="",
+                address=address,
+                city=city,
+                zip_code=zip_code,
+                country=country,
+                notes=""
+            )
+            # Refresh customers cache
+            st.session_state.customers_db = load_customers()
 
         st.success(f"✅ Proforma {proforma_number} ready! Total: {currency} {grand_total:.2f}")
         st.download_button(
