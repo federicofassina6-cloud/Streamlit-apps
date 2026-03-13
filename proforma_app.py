@@ -286,15 +286,16 @@ else:
 
 # ── 4. LINE ITEMS ──
 st.subheader("4. Line Items")
-st.caption("Select from catalogue or choose '— custom —' to type manually.")
+st.caption("Select from catalogue or type a custom product name.")
 
 items_to_remove = []
 for i, item in enumerate(st.session_state.line_items):
     with st.container():
-        c1, c2, c3, c4, c5 = st.columns([2, 5, 1.2, 1.5, 0.4])
+        c1, c2, c3, c4 = st.columns([3, 1.5, 1.5, 0.4])
         with c1:
+            # Single dropdown — catalogue + custom option
             prod_idx = st.selectbox(
-                f"Product #{i+1}",
+                f"Product Name #{i+1} (bold in document)",
                 range(len(PRODUCT_NAMES)),
                 format_func=lambda x: PRODUCT_NAMES[x],
                 key=f"prod_{i}",
@@ -308,27 +309,32 @@ for i, item in enumerate(st.session_state.line_items):
                 else:
                     item["description"] = ""
                     item["unit_price"] = 0.0
-        with c2:
-            item["description"] = st.text_input(
-                "Product Name (bold in doc)", value=item["description"],
-                key=f"desc_{i}", placeholder="e.g. CHROMED STEEL ROLLER WW1300"
-            )
+            # If custom, show text input to type name
+            if prod_idx == 0:
+                item["description"] = st.text_input(
+                    "Custom Product Name",
+                    value=item["description"],
+                    key=f"desc_{i}",
+                    placeholder="e.g. CHROMED STEEL ROLLER WW1300"
+                )
             item["details"] = st.text_input(
-                "Description / Specs", value=item.get("details", ""),
+                "Description / Specs (optional)",
+                value=item.get("details", ""),
                 key=f"details_{i}",
                 placeholder="e.g. Dimensions (Length) × (Width) × (Height) (±0,1) mm. – blackish color"
             )
-        with c3:
+        with c2:
             item["qty"] = st.number_input(
                 "Qty", min_value=0.0, value=float(item["qty"]),
-                step=1.0, key=f"qty_{i}"
+                step=1.0, format="%.2f", key=f"qty_{i}"
             )
-        with c4:
+        with c3:
             item["unit_price"] = st.number_input(
                 f"Unit Price ({currency})", min_value=0.0,
-                value=float(item["unit_price"]), step=10.0, key=f"price_{i}"
+                value=float(item["unit_price"]), step=0.01,
+                format="%.2f", key=f"price_{i}"
             )
-        with c5:
+        with c4:
             st.write("")
             st.write("")
             if st.button("🗑", key=f"del_{i}", help="Remove line"):
@@ -444,34 +450,33 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
 
             cells = new_row.cells
 
-            # Description cell: bold product name on first line, normal details on second line
+            # Description cell: bold product name line 1, normal details line 2
             desc_cell = cells[1]
+            # Clear all existing paragraphs content
             for para in desc_cell.paragraphs:
                 for run in para.runs:
                     run.text = ""
-            # First line — product name, bold
+                    # Clear all run XML properties so no inherited italic/bold
+                    rPr = run._r.find(qn('w:rPr'))
+                    if rPr is not None:
+                        run._r.remove(rPr)
+
             first_para = desc_cell.paragraphs[0]
-            if first_para.runs:
-                r = first_para.runs[0]
-            else:
-                r = first_para.add_run()
-            r.text = item["description"]
+            r = first_para.add_run(item["description"])
             r.bold = True
             r.italic = False
-            # Second line — details, normal (only if filled in)
+
             details = item.get("details", "").strip()
             if details:
-                from docx.oxml import OxmlElement as _OE
-                new_para = copy.deepcopy(first_para._p)
-                desc_cell._tc.append(new_para)
+                new_p = copy.deepcopy(first_para._p)
+                desc_cell._tc.append(new_p)
                 second_para = desc_cell.paragraphs[-1]
                 for run in second_para.runs:
                     run.text = ""
-                if second_para.runs:
-                    dr = second_para.runs[0]
-                else:
-                    dr = second_para.add_run()
-                dr.text = details
+                    rPr = run._r.find(qn('w:rPr'))
+                    if rPr is not None:
+                        run._r.remove(rPr)
+                dr = second_para.add_run(details)
                 dr.bold = False
                 dr.italic = False
 
@@ -485,7 +490,7 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
             # No borders on data rows
             remove_row_borders(new_row)
 
-        # Add total row — bold, not italic, no bottom border
+        # Add total row — bold, not italic, double top border, no wrap
         new_tr = copy.deepcopy(table.rows[0]._tr)
         table._tbl.append(new_tr)
         total_row = table.rows[-1]
@@ -500,9 +505,34 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         set_cell_text(tcells[4], currency,    bold=True, italic=False, font_name="Verdana", font_size=10)
         set_cell_text(tcells[5], total_str,   bold=True, italic=False)
 
-        # Remove all borders from total row, then also explicitly no bottom border
-        remove_row_borders(total_row)
-        remove_bottom_border_from_row(total_row)
+        # Remove all borders then add double top border + no bottom border on every cell
+        for cell in total_row.cells:
+            tc = cell._tc
+            tcPr = tc.find(qn('w:tcPr'))
+            if tcPr is None:
+                tcPr = OxmlElement('w:tcPr')
+                tc.insert(0, tcPr)
+            # Remove existing borders
+            existing = tcPr.find(qn('w:tcBorders'))
+            if existing is not None:
+                tcPr.remove(existing)
+            tcBorders = OxmlElement('w:tcBorders')
+            # Double top border
+            top = OxmlElement('w:top')
+            top.set(qn('w:val'), 'double')
+            top.set(qn('w:sz'), '6')
+            top.set(qn('w:space'), '0')
+            top.set(qn('w:color'), 'auto')
+            tcBorders.append(top)
+            # All other sides nil
+            for side in ['left', 'bottom', 'right']:
+                b = OxmlElement(f'w:{side}')
+                b.set(qn('w:val'), 'nil')
+                tcBorders.append(b)
+            tcPr.append(tcBorders)
+            # No wrap
+            noWrap = OxmlElement('w:noWrap')
+            tcPr.append(noWrap)
 
         # ── Terms table (Table 1) ──
         terms_table = doc.tables[1]
