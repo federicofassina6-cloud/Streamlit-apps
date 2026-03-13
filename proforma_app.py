@@ -165,8 +165,8 @@ def replace_in_paragraph(para, replacements):
             for run in para.runs[1:]:
                 run.text = ""
 
-def set_cell_text(cell, text, bold=False, italic=False, font_name=None, font_size=None):
-    """Clear cell and write text with explicit formatting."""
+def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", font_size=10):
+    """Clear cell and write text with explicit formatting. Defaults to Verdana 10."""
     for para in cell.paragraphs:
         for run in para.runs:
             run.text = ""
@@ -177,10 +177,8 @@ def set_cell_text(cell, text, bold=False, italic=False, font_name=None, font_siz
     run = para.add_run(text)
     run.bold = bold
     run.italic = italic
-    if font_name:
-        run.font.name = font_name
-    if font_size:
-        run.font.size = Pt(font_size)
+    run.font.name = font_name
+    run.font.size = Pt(font_size)
 
 def remove_row_borders(row):
     """Remove all borders from a table row's cells."""
@@ -421,15 +419,34 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
             st.error(f"❌ Template not found: {e}")
             st.stop()
 
-        # Replace header paragraphs (preserves bold/italic from template)
+        # Replace header paragraphs
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
 
-        # Explicitly bold the date (paragraph 0, the date run)
+        # Fix paragraph 0: "Schio, " normal + date bold, both Verdana 10
         date_para = doc.paragraphs[0]
         for run in date_para.runs:
-            if formatted_date in run.text or any(c.isdigit() for c in run.text):
-                run.bold = True
+            run.text = ""
+            rPr = run._r.find(qn('w:rPr'))
+            if rPr is not None:
+                run._r.remove(rPr)
+        date_para.clear()
+        r1 = date_para.add_run("Schio, ")
+        r1.bold = False
+        r1.font.name = "Verdana"
+        r1.font.size = Pt(10)
+        r2 = date_para.add_run(formatted_date)
+        r2.bold = True
+        r2.font.name = "Verdana"
+        r2.font.size = Pt(10)
+
+        # Apply Verdana 10 to all header paragraphs
+        for para in doc.paragraphs:
+            if para == date_para:
+                continue  # already handled above
+            for run in para.runs:
+                run.font.name = "Verdana"
+                run.font.size = Pt(10)
 
         # ── Product table (Table 0) ──
         table = doc.tables[0]
@@ -470,6 +487,8 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
             r = first_para.add_run(item["description"])
             r.bold = True
             r.italic = False
+            r.font.name = "Verdana"
+            r.font.size = Pt(10)
 
             details = item.get("details", "").strip()
             if details:
@@ -484,6 +503,8 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
                 dr = second_para.add_run(details)
                 dr.bold = False
                 dr.italic = False
+                dr.font.name = "Verdana"
+                dr.font.size = Pt(10)
 
             set_cell_text(cells[0], str(pos),   bold=False, italic=False)
             set_cell_text(cells[2], qty_str,    bold=False, italic=False)
