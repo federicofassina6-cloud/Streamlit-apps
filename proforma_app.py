@@ -468,7 +468,7 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
 
             qty_str = f"{item['qty']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             price_str = f"{item['unit_price']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            total_str = f"{int(round(line_total)):,}".replace(",", ".") + ",-"
+            total_str = f"{line_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + ",-"
 
             cells = new_row.cells
 
@@ -526,7 +526,7 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         table._tbl.append(new_tr)
         total_row = table.rows[-1]
         tcells = total_row.cells
-        total_str = f"{int(round(grand_total)):,}".replace(",", ".") + ",-"
+        total_str = f"{grand_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + ",-"
         total_label = f"TOTAL PRICE \u2013 {delivery_terms} -"
 
         set_cell_text(tcells[0], "",           bold=True, italic=False)
