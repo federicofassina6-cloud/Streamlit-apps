@@ -130,17 +130,40 @@ SHIPMENT_OPTIONS = [
 # DOCX HELPERS
 # ─────────────────────────────────────────────
 def replace_in_paragraph(para, replacements):
-    """Replace placeholders while preserving run formatting."""
-    full_text = "".join(run.text for run in para.runs)
-    changed = False
+    """Replace placeholders, preserving the formatting of the run that held the placeholder."""
     for key, val in replacements.items():
-        if key in full_text:
-            full_text = full_text.replace(key, val)
-            changed = True
-    if changed and para.runs:
-        para.runs[0].text = full_text
-        for run in para.runs[1:]:
-            run.text = ""
+        # Find which run contains the key
+        full_text = "".join(run.text for run in para.runs)
+        if key not in full_text:
+            continue
+        # Find the run that contains (or starts) the placeholder
+        keeper_run = None
+        for run in para.runs:
+            if key in run.text or (run.text and run.text in key):
+                keeper_run = run
+                break
+        # If not found in a single run, find the bold one or last non-empty
+        if keeper_run is None:
+            for run in para.runs:
+                if run.bold:
+                    keeper_run = run
+                    break
+        if keeper_run is None and para.runs:
+            keeper_run = para.runs[-1]
+        # Merge all runs into keeper_run with replacement applied
+        new_text = full_text.replace(key, val)
+        if para.runs:
+            para.runs[0].text = new_text
+            # Copy formatting from keeper_run to runs[0]
+            if keeper_run and keeper_run != para.runs[0]:
+                para.runs[0].bold = keeper_run.bold
+                para.runs[0].italic = keeper_run.italic
+                if keeper_run.font.name:
+                    para.runs[0].font.name = keeper_run.font.name
+                if keeper_run.font.size:
+                    para.runs[0].font.size = keeper_run.font.size
+            for run in para.runs[1:]:
+                run.text = ""
 
 def set_cell_text(cell, text, bold=False, italic=False, font_name=None, font_size=None):
     """Clear cell and write text with explicit formatting."""
@@ -205,12 +228,12 @@ def remove_bottom_border_from_row(row):
 # ─────────────────────────────────────────────
 if "line_items" not in st.session_state:
     st.session_state.line_items = [
-        {"product_idx": 0, "description": "", "qty": 1.0, "unit_price": 0.0}
+        {"product_idx": 0, "description": "", "details": "", "qty": 1.0, "unit_price": 0.0}
     ]
 
 def add_line():
     st.session_state.line_items.append(
-        {"product_idx": 0, "description": "", "qty": 1.0, "unit_price": 0.0}
+        {"product_idx": 0, "description": "", "details": "", "qty": 1.0, "unit_price": 0.0}
     )
 
 # ─────────────────────────────────────────────
@@ -287,8 +310,13 @@ for i, item in enumerate(st.session_state.line_items):
                     item["unit_price"] = 0.0
         with c2:
             item["description"] = st.text_input(
-                "Description", value=item["description"],
-                key=f"desc_{i}", placeholder="Product description"
+                "Product Name (bold in doc)", value=item["description"],
+                key=f"desc_{i}", placeholder="e.g. CHROMED STEEL ROLLER WW1300"
+            )
+            item["details"] = st.text_input(
+                "Description / Specs", value=item.get("details", ""),
+                key=f"details_{i}",
+                placeholder="e.g. Dimensions (Length) × (Width) × (Height) (±0,1) mm. – blackish color"
             )
         with c3:
             item["qty"] = st.number_input(
@@ -412,12 +440,42 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
 
             qty_str = f"{item['qty']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             price_str = f"{item['unit_price']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            total_str = f"{line_total:,.0f},-".replace(",", ".")
+            total_str = f"{int(round(line_total)):,}".replace(",", ".") + ",-"
 
             cells = new_row.cells
-            # pos, description, qty, price — not bold, not italic
+
+            # Description cell: bold product name on first line, normal details on second line
+            desc_cell = cells[1]
+            for para in desc_cell.paragraphs:
+                for run in para.runs:
+                    run.text = ""
+            # First line — product name, bold
+            first_para = desc_cell.paragraphs[0]
+            if first_para.runs:
+                r = first_para.runs[0]
+            else:
+                r = first_para.add_run()
+            r.text = item["description"]
+            r.bold = True
+            r.italic = False
+            # Second line — details, normal (only if filled in)
+            details = item.get("details", "").strip()
+            if details:
+                from docx.oxml import OxmlElement as _OE
+                new_para = copy.deepcopy(first_para._p)
+                desc_cell._tc.append(new_para)
+                second_para = desc_cell.paragraphs[-1]
+                for run in second_para.runs:
+                    run.text = ""
+                if second_para.runs:
+                    dr = second_para.runs[0]
+                else:
+                    dr = second_para.add_run()
+                dr.text = details
+                dr.bold = False
+                dr.italic = False
+
             set_cell_text(cells[0], str(pos),   bold=False, italic=False)
-            set_cell_text(cells[1], item["description"], bold=False, italic=False)
             set_cell_text(cells[2], qty_str,    bold=False, italic=False)
             set_cell_text(cells[3], price_str,  bold=False, italic=False)
             # ISO currency: Verdana 10, not italic
@@ -432,7 +490,7 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         table._tbl.append(new_tr)
         total_row = table.rows[-1]
         tcells = total_row.cells
-        total_str = f"{grand_total:,.0f},-".replace(",", ".")
+        total_str = f"{int(round(grand_total)):,}".replace(",", ".") + ",-"
         total_label = f"TOTAL PRICE \u2013 {delivery_terms} -"
 
         set_cell_text(tcells[0], total_label, bold=True, italic=False)
