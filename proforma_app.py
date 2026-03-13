@@ -170,12 +170,11 @@ def set_cell_text(cell, text, bold=False, italic=False, font_name=None, font_siz
     for para in cell.paragraphs:
         for run in para.runs:
             run.text = ""
+            rPr = run._r.find(qn('w:rPr'))
+            if rPr is not None:
+                run._r.remove(rPr)
     para = cell.paragraphs[0]
-    if para.runs:
-        run = para.runs[0]
-    else:
-        run = para.add_run()
-    run.text = text
+    run = para.add_run(text)
     run.bold = bold
     run.italic = italic
     if font_name:
@@ -425,6 +424,12 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         # Replace header paragraphs (preserves bold/italic from template)
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
+
+        # Explicitly bold the date (paragraph 0, the date run)
+        date_para = doc.paragraphs[0]
+        for run in date_para.runs:
+            if formatted_date in run.text or any(c.isdigit() for c in run.text):
+                run.bold = True
 
         # ── Product table (Table 0) ──
         table = doc.tables[0]
