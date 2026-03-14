@@ -625,6 +625,12 @@ if st.button("📥 Generate Proforma Invoice", type="primary", use_container_wid
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
 
+        # Fix "To the attn. of" paragraph — entire line should NOT be bold
+        for para in doc.paragraphs:
+            if "To the attn. of" in "".join(r.text for r in para.runs):
+                for run in para.runs:
+                    run.bold = False
+
         # Paragraph 0: "Schio, " normal + date bold, Verdana 10
         date_para = doc.paragraphs[0]
         for run in date_para.runs:
