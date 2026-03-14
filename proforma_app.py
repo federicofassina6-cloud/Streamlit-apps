@@ -102,6 +102,39 @@ def load_customers():
         pass
     return []
 
+def load_delivery_terms():
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/delivery_terms",
+        headers=HEADERS,
+        params={"select": "term", "order": "created_at.asc"}
+    )
+    try:
+        data = response.json()
+        if isinstance(data, list):
+            return [r["term"] for r in data]
+    except:
+        pass
+    return []
+
+def save_delivery_term(term):
+    # Only save if it doesn't already exist
+    check = requests.get(
+        f"{SUPABASE_URL}/rest/v1/delivery_terms",
+        headers=HEADERS,
+        params={"term": f"eq.{term}", "select": "id"}
+    )
+    try:
+        existing = check.json()
+        if isinstance(existing, list) and len(existing) > 0:
+            return
+    except:
+        pass
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/delivery_terms",
+        headers=HEADERS,
+        json={"term": term}
+    )
+
 def save_customer(company_name, contact_name, email, phone, address, city, zip_code, country, notes):
     # Check if customer already exists by company name
     check = requests.get(
@@ -155,6 +188,10 @@ if "products_db" not in st.session_state:
 if "customers_db" not in st.session_state:
     st.session_state.customers_db = load_customers()
 
+# Load delivery terms from Supabase (cached per session)
+if "delivery_terms_db" not in st.session_state:
+    st.session_state.delivery_terms_db = load_delivery_terms()
+
 PRODUCTS = st.session_state.products_db
 
 # Group by category for display
@@ -199,14 +236,7 @@ PAYMENT_OPTIONS = [
     "30 days from invoice date",
     "Letter of credit at sight",
 ]
-DELIVERY_TERMS_OPTIONS = [
-    "DAP destination",
-    "DAP Shenzhen (CN)",
-    "DAP Perrysburg (USA)",
-    "EXW Schio (Italy)",
-    "CIF destination airport",
-    "FCA Schio (Italy)",
-]
+DELIVERY_TERMS_OPTIONS = st.session_state.delivery_terms_db
 DELIVERY_TIME_OPTIONS = [
     "2 weeks from payment receipt",
     "3 - 5 weeks from payment receipt",
@@ -534,7 +564,13 @@ with col_t1:
 
     delivery_terms = st.selectbox("Delivery Terms", DELIVERY_TERMS_OPTIONS + ["— custom —"])
     if delivery_terms == "— custom —":
-        delivery_terms = st.text_input("Custom Delivery Terms")
+        delivery_terms = st.text_input("Custom Delivery Terms", placeholder="e.g. DAP Tokyo (JP)")
+        if delivery_terms and delivery_terms not in DELIVERY_TERMS_OPTIONS:
+            if st.button("💾 Save this delivery term", key="save_dt"):
+                save_delivery_term(delivery_terms)
+                st.session_state.delivery_terms_db = load_delivery_terms()
+                st.success(f"✅ '{delivery_terms}' saved to database!")
+                st.rerun()
 
     delivery_time = st.selectbox("Delivery Time", DELIVERY_TIME_OPTIONS + ["— custom —"])
     if delivery_time == "— custom —":
