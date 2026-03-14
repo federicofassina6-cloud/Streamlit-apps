@@ -311,13 +311,11 @@ PRODUCT_NAMES = [LBL["custom"]]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
-    PRODUCT_NAMES.append(f"── {cat} ──")
     for p in cat_products:
         desc_key = "description" if LANG == "it" else "description_eng"
         primary = (p.get(desc_key) or p["description"])
-        label = primary[:65] + ("…" if len(primary) > 65 else "")
-        if LANG == "en" and p.get("description") and p.get("description_eng"):
-            label += f'  ({p["description"][:35]})'
+        label = primary[:50] + ("…" if len(primary) > 50 else "")
+
         PRODUCT_MAP[len(PRODUCT_NAMES)] = p
         PRODUCT_NAMES.append(label)
 
@@ -500,8 +498,6 @@ for i, item in enumerate(st.session_state.line_items):
                 format_func=lambda x: PRODUCT_NAMES[x],
                 key=f"prod_{i}", index=item["product_idx"]
             )
-            if prod_idx > 0 and PRODUCT_NAMES[prod_idx].startswith("── "):
-                prod_idx = item["product_idx"]
             if prod_idx != item["product_idx"]:
                 item["product_idx"] = prod_idx
                 if prod_idx > 0 and prod_idx in PRODUCT_MAP:
@@ -516,6 +512,11 @@ for i, item in enumerate(st.session_state.line_items):
                     item["description"] = ""
                     item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
                 needs_rerun = True
+            # Show Italian name as caption in English mode
+            if LANG == "en" and prod_idx > 0 and prod_idx in PRODUCT_MAP:
+                ita = PRODUCT_MAP[prod_idx].get("description", "")
+                if ita:
+                    st.caption(f"🇮🇹 {ita}")
             if prod_idx == 0:
                 item["description"] = st.text_input(
                     LBL["custom_prod"], value=item["description"], key=f"desc_{i}")
