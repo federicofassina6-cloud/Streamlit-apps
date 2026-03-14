@@ -147,22 +147,70 @@ def save_delivery_address(company_name, street_address, zip_code, city, country)
               "zip_code": zip_code, "city": city, "country": country}
     )
 
+def load_vat_exemptions():
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/vat_exemptions",
+        headers=HEADERS,
+        params={"select": "text", "order": "created_at.asc"}
+    )
+    try:
+        data = response.json()
+        if isinstance(data, list):
+            return [r["text"] for r in data]
+    except:
+        pass
+    return []
+
+def save_vat_exemption(text):
+    check = requests.get(
+        f"{SUPABASE_URL}/rest/v1/vat_exemptions",
+        headers=HEADERS,
+        params={"text": f"eq.{text}", "select": "id"}
+    )
+    try:
+        existing = check.json()
+        if isinstance(existing, list) and len(existing) > 0:
+            return
+    except:
+        pass
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/vat_exemptions",
+        headers=HEADERS,
+        json={"text": text}
+    )
+
 # ─────────────────────────────────────────────
 # DOCX HELPERS
 # ─────────────────────────────────────────────
 def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", font_size=10):
-    for para in cell.paragraphs:
-        for run in para.runs:
-            run.text = ""
-            rPr = run._r.find(qn('w:rPr'))
-            if rPr is not None:
-                run._r.remove(rPr)
-    para = cell.paragraphs[0]
-    run = para.add_run(text)
+    # Remove ALL extra paragraphs, keep only first
+    tc = cell._tc
+    paras = tc.findall(qn('w:p'))
+    for extra_p in paras[1:]:
+        tc.remove(extra_p)
+    # Clear runs in first paragraph
+    first_p = cell.paragraphs[0]
+    for run in first_p.runs:
+        run.text = ""
+        rPr = run._r.find(qn('w:rPr'))
+        if rPr is not None:
+            run._r.remove(rPr)
+    # Write new text with newlines as separate runs separated by <w:br>
+    lines = text.split("\n")
+    run = first_p.add_run(lines[0])
     run.bold = bold
     run.italic = italic
     run.font.name = font_name
     run.font.size = Pt(font_size)
+    for line in lines[1:]:
+        br = OxmlElement("w:br")
+        run._r.addnext(br)
+        run2 = first_p.add_run(line)
+        run2.bold = bold
+        run2.italic = italic
+        run2.font.name = font_name
+        run2.font.size = Pt(font_size)
+        run = run2
 
 def replace_in_table_cell(cell, replacements):
     for para in cell.paragraphs:
@@ -200,6 +248,8 @@ if "delivery_db" not in st.session_state:
     st.session_state.delivery_db = load_delivery_addresses()
 if "delivery_terms_db" not in st.session_state:
     st.session_state.delivery_terms_db = load_delivery_terms()
+if "vat_exemptions_db" not in st.session_state:
+    st.session_state.vat_exemptions_db = load_vat_exemptions()
 
 PRODUCTS = st.session_state.products_db
 CATEGORIES = []
@@ -241,10 +291,7 @@ DELIVERY_TIME_OPTIONS = [
     "To be confirmed",
     "— custom —"
 ]
-VAT_EXEMPTION_OPTIONS = [
-    "— none —",
-    "— custom —",
-]
+# VAT exemptions loaded dynamically from Supabase
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -394,11 +441,19 @@ with col_t2:
     if hs_code == "— custom —":
         hs_code = st.text_input("Custom HS Code")
 
-    vat_exemption = st.selectbox("VAT Exemption", VAT_EXEMPTION_OPTIONS)
-    if vat_exemption == "— custom —":
-        vat_exemption = st.text_input("Custom VAT exemption text")
-    elif vat_exemption == "— none —":
+    vat_options_dynamic = ["— none —"] + st.session_state.vat_exemptions_db + ["— custom —"]
+    vat_exemption_choice = st.selectbox("VAT Exemption", vat_options_dynamic)
+    if vat_exemption_choice == "— custom —":
+        vat_exemption = st.text_input("Custom VAT exemption text", placeholder="e.g. Art. 8 DPR 633/72")
+        if vat_exemption and st.button("💾 Save this VAT exemption", key="save_vat"):
+            save_vat_exemption(vat_exemption)
+            st.session_state.vat_exemptions_db = load_vat_exemptions()
+            st.success(f"✅ Saved!")
+            st.rerun()
+    elif vat_exemption_choice == "— none —":
         vat_exemption = ""
+    else:
+        vat_exemption = vat_exemption_choice
 
 # ── 5. CURRENCY & PRICE TYPE ──
 st.subheader("5. Currency & Price Type")
