@@ -660,7 +660,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
                 pos       = row_idx * 10
                 line_total = item["qty"] * item["unit_price"]
                 qty_str   = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                price_str = f"{item['unit_price']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                price_str = f"{item['unit_price']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 total_str = f"{line_total:.2f},-"
                 set_cell_text(cells[0], str(pos), bold=False)
                 desc_cell  = cells[1]
