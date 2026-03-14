@@ -512,11 +512,19 @@ for i, item in enumerate(st.session_state.line_items):
                     item["description"] = ""
                     item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
                 needs_rerun = True
-            # Show Italian name as caption in English mode
-            if LANG == "en" and prod_idx > 0 and prod_idx in PRODUCT_MAP:
-                ita = PRODUCT_MAP[prod_idx].get("description", "")
-                if ita:
-                    st.caption(f"🇮🇹 {ita}")
+            # Show full descriptions as caption under dropdown
+            if prod_idx > 0 and prod_idx in PRODUCT_MAP:
+                p_selected = PRODUCT_MAP[prod_idx]
+                ita = p_selected.get("description", "")
+                eng = p_selected.get("description_eng", "")
+                if LANG == "en":
+                    if ita:
+                        st.caption(f"🇮🇹 {ita}")
+                else:
+                    if ita:
+                        st.caption(f"🇮🇹 {ita}")
+                    if eng:
+                        st.caption(f"🇬🇧 {eng}")
             if prod_idx == 0:
                 item["description"] = st.text_input(
                     LBL["custom_prod"], value=item["description"], key=f"desc_{i}")
