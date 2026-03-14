@@ -242,11 +242,8 @@ DELIVERY_TIME_OPTIONS = [
     "— custom —"
 ]
 VAT_EXEMPTION_OPTIONS = [
-    "Art. 8 c.1 lett. a) DPR 633/72 - Operazione non imponibile",
-    "Art. 41 DL 331/93 - Cessione intracomunitaria non imponibile",
-    "Art. 7-bis DPR 633/72 - Operazione fuori campo IVA",
+    "— none —",
     "— custom —",
-    "— none —"
 ]
 
 # ─────────────────────────────────────────────
@@ -255,13 +252,13 @@ VAT_EXEMPTION_OPTIONS = [
 if "fattura_line_items" not in st.session_state:
     st.session_state.fattura_line_items = [
         {"product_idx": 0, "description": "", "description_it": "", "details": "",
-         "qty": 1.0, "unit_price": 0.0, "price_type": "Client"}
+         "qty": 1.0, "unit_price": 0.0, "price_type": "Cliente"}
     ]
 
 def add_line():
     st.session_state.fattura_line_items.append(
         {"product_idx": 0, "description": "", "description_it": "", "details": "",
-         "qty": 1.0, "unit_price": 0.0, "price_type": "Client"}
+         "qty": 1.0, "unit_price": 0.0, "price_type": "Cliente"}
     )
 
 # ─────────────────────────────────────────────
@@ -350,6 +347,7 @@ if selected_delivery_idx == 0:
     del_address = address
     del_zip     = zip_code
     del_city    = city
+    del_region  = region
     del_country = country
     st.caption("📦 Delivery address same as billing address")
 elif selected_delivery_idx == 1:
@@ -361,6 +359,7 @@ elif selected_delivery_idx == 1:
         del_zip = st.text_input("Delivery ZIP")
     with col_dc:
         del_city = st.text_input("Delivery City")
+    del_region = st.text_input("Delivery Region", placeholder="(optional)")
     del_country = st.text_input("Delivery Country")
     if del_company and st.button("💾 Save this delivery address"):
         save_delivery_address(del_company, del_address, del_zip, del_city, del_country)
@@ -373,6 +372,7 @@ else:
     del_address = d.get("street_address", "")
     del_zip     = d.get("zip_code", "")
     del_city    = d.get("city", "")
+    del_region  = ""
     del_country = d.get("country", "")
     st.caption(f"📦 {del_company} — {del_address}, {del_zip} {del_city}, {del_country}")
 
@@ -411,7 +411,7 @@ with col_cur:
         currency = currency_choice
 with col_pt:
     global_price_type = st.radio(
-        "Price type", ["Client", "Reseller"], horizontal=True, key="fattura_price_type"
+        "Price type", ["Cliente", "Rivenditore"], horizontal=True, key="fattura_price_type"
     )
     if st.session_state.get("_fattura_last_price_type") != global_price_type:
         st.session_state["_fattura_last_price_type"] = global_price_type
@@ -420,7 +420,7 @@ with col_pt:
             if item.get("product_idx", 0) > 0 and item.get("product_idx") in PRODUCT_MAP:
                 pc = item.get("price_client", 0.0)
                 pr = item.get("price_reseller", 0.0)
-                item["unit_price"] = pc if global_price_type == "Client" else pr
+                item["unit_price"] = pc if global_price_type == "Cliente" else pr
         st.rerun()
 
 # ── 6. LINE ITEMS ──
@@ -448,7 +448,7 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     item["description_it"] = p.get("description", "")
                     item["price_client"]   = float(p.get("unit_price_client") or 0)
                     item["price_reseller"] = float(p.get("unit_price_reseller") or 0)
-                    item["unit_price"] = item["price_client"] if global_price_type == "Client" else item["price_reseller"]
+                    item["unit_price"] = item["price_client"] if global_price_type == "Cliente" else item["price_reseller"]
                 else:
                     item["description"] = ""
                     item["description_it"] = ""
@@ -549,7 +549,15 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                       f"PAYMENT TERMS:\n{payment}",
                       bold=False, font_name="Verdana", font_size=10)
         # Delivery address row (row 2)
-        del_text = f"DELIVERY PLACE OF THE GOODS:\n{del_company}\n{del_address}\n{del_zip} {del_city}\n{del_country}"
+        del_city_region = f"{del_zip} {del_city}".strip()
+        if del_region:
+            del_city_region += f", {del_region}"
+        del_lines = ["DELIVERY PLACE OF THE GOODS:"]
+        if del_company: del_lines.append(del_company)
+        if del_address: del_lines.append(del_address)
+        if del_city_region: del_lines.append(del_city_region)
+        if del_country: del_lines.append(del_country)
+        del_text = "\n".join(del_lines)
         set_cell_text(t1.rows[2].cells[0], del_text, bold=False, font_name="Verdana", font_size=10)
 
         # ── Table 2: Products ──
@@ -564,7 +572,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             if row_idx - 1 < len(valid_items):
                 item       = valid_items[row_idx - 1]
                 line_total = item["qty"] * item["unit_price"]
-                qty_str    = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                qty_str    = f"{item['qty']:.1f}"
                 price_str  = f"{item['unit_price']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 total_str  = f"{line_total:,.2f},-"
 
@@ -581,19 +589,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 r_en.bold = True
                 r_en.font.name = "Verdana"
                 r_en.font.size = Pt(10)
-                # Italian subtitle
-                it_name = item.get("description_it", "").strip()
-                if it_name:
-                    new_p = copy.deepcopy(first_para._p)
-                    desc_cell._tc.append(new_p)
-                    it_para = desc_cell.paragraphs[-1]
-                    for run in it_para.runs:
-                        run.text = ""
-                    r_it = it_para.add_run(it_name)
-                    r_it.bold = False
-                    r_it.italic = True
-                    r_it.font.name = "Verdana"
-                    r_it.font.size = Pt(8)
                 # Details
                 details = item.get("details", "").strip()
                 if details:
@@ -605,7 +600,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                     r_det = det_para.add_run(details)
                     r_det.bold = False
                     r_det.font.name = "Verdana"
-                    r_det.font.size = Pt(9)
+                    r_det.font.size = Pt(10)
 
                 set_cell_text(cells[2], currency,  bold=False)
                 set_cell_text(cells[3], price_str, bold=False)
