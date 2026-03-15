@@ -293,12 +293,11 @@ for p in PRODUCTS:
         seen_cats.append(cat)
         CATEGORIES.append(cat)
 
-# Build product names — NO custom option
+# Build product names — NO custom option, NO category separators in dropdown
 PRODUCT_NAMES = ["— select product —"]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
-    PRODUCT_NAMES.append(f"── {cat} ──")
     for p in cat_products:
         desc_key = "description" if LANG == "it" else "description_eng"
         primary  = (p.get(desc_key) or p.get("description") or "")
@@ -398,17 +397,21 @@ with col_d2:
     suggested_number = get_next_proforma_number()
     year_2digit = selected_date.strftime('%y')
     existing_numbers = load_existing_proforma_numbers()
+
+    # Let user pick a number but block duplicates
     proforma_number = st.text_input(
         LBL["number_label"],
         value=suggested_number,
         help=LBL["number_hint"]
     )
-    # Validate number
+    # Strip whitespace
+    proforma_number = proforma_number.strip()
+
     number_ok = True
     if proforma_number in existing_numbers:
         st.error(LBL["number_dup"])
         number_ok = False
-    else:
+    elif proforma_number:
         try:
             seq = int(proforma_number.split("/")[0])
             expected = int(suggested_number.split("/")[0])
@@ -520,7 +523,7 @@ for i, item in enumerate(st.session_state.line_items):
                 format_func=lambda x: PRODUCT_NAMES[x],
                 key=f"prod_{i}", index=item["product_idx"]
             )
-            # Skip category separator headers
+            # Skip category separator headers (legacy guard)
             if prod_idx > 0 and PRODUCT_NAMES[prod_idx].startswith("── "):
                 prod_idx = item["product_idx"]
 
@@ -614,11 +617,9 @@ doc_name = st.text_input(LBL["file_name"], value=default_name)
 
 # ── GENERATE ──────────────────────────────────
 st.divider()
-if st.button(LBL["generate"], type="primary", use_container_width=True):
+if st.button(LBL["generate"], type="primary", use_container_width=True, disabled=not number_ok):
     if not company:
         st.warning(LBL["warn_company"])
-    elif not number_ok:
-        st.error(LBL["number_dup"])
     elif not any(item["description"].strip() for item in st.session_state.line_items):
         st.warning(LBL["warn_items"])
     else:
@@ -662,7 +663,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
                 r2.bold = False; r2.font.name = "Verdana"; r2.font.size = Pt(10)
                 continue
 
-            # "To the attn of" paragraph
+            # "To the attn of" paragraph — collapse completely if not used
             if "To the attn. of" in full or "All'attenzione" in full:
                 if include_attn and (salutation or full_name):
                     para.clear()
@@ -671,7 +672,30 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
                     r_name = para.add_run(full_name)
                     r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
                 else:
+                    # Collapse: clear text and set paragraph spacing to 0
                     para.clear()
+                    from docx.oxml import OxmlElement as _OE
+                    pPr = para._p.find(qn('w:pPr'))
+                    if pPr is None:
+                        pPr = _OE('w:pPr')
+                        para._p.insert(0, pPr)
+                    spacing = _OE('w:spacing')
+                    spacing.set(qn('w:before'), '0')
+                    spacing.set(qn('w:after'), '0')
+                    spacing.set(qn('w:line'), '240')
+                    spacing.set(qn('w:lineRule'), 'auto')
+                    # Remove existing spacing if any
+                    for existing in pPr.findall(qn('w:spacing')):
+                        pPr.remove(existing)
+                    pPr.append(spacing)
+                continue
+
+            # PROFORMA INVOICE NO line — bold
+            if "PROFORMA INVOICE NO" in full or "FATTURA PROFORMA N" in full:
+                for run in para.runs:
+                    run.bold = True
+                    run.font.name = "Verdana"
+                    run.font.size = Pt(10)
                 continue
 
             # Company name — bold
