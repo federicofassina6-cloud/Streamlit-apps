@@ -13,10 +13,8 @@ st.set_page_config(page_title="Fattura Generator", layout="wide")
 
 def fmt_price(n):
     """Format number as European: 2.470,– """
-    formatted = f"{n:,.2f}"  # 2,470.00
-    # swap separators: , -> X -> . and . -> ,
+    formatted = f"{n:,.2f}"
     formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
-    # remove trailing ,00 zeros and add –
     if formatted.endswith(",00"):
         formatted = formatted[:-3] + ",–"
     else:
@@ -163,12 +161,12 @@ def load_vat_exemptions():
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/vat_exemptions",
         headers=HEADERS,
-        params={"select": "text", "order": "created_at.asc"}
+        params={"select": "code", "order": "created_at.asc"}
     )
     try:
         data = response.json()
         if isinstance(data, list):
-            return [r["text"] for r in data]
+            return [r["code"] for r in data if r.get("code")]
     except:
         pass
     return []
@@ -177,37 +175,33 @@ def save_vat_exemption(text):
     check = requests.get(
         f"{SUPABASE_URL}/rest/v1/vat_exemptions",
         headers=HEADERS,
-        params={"text": f"eq.{text}", "select": "id"}
+        params={"code": f"eq.{text}", "select": "id"}
     )
     try:
-        existing = check.json()
-        if isinstance(existing, list) and len(existing) > 0:
+        if isinstance(check.json(), list) and len(check.json()) > 0:
             return
     except:
         pass
     requests.post(
         f"{SUPABASE_URL}/rest/v1/vat_exemptions",
         headers=HEADERS,
-        json={"text": text}
+        json={"code": text}
     )
 
 # ─────────────────────────────────────────────
 # DOCX HELPERS
 # ─────────────────────────────────────────────
 def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", font_size=10):
-    # Remove ALL extra paragraphs, keep only first
     tc = cell._tc
     paras = tc.findall(qn('w:p'))
     for extra_p in paras[1:]:
         tc.remove(extra_p)
-    # Clear runs in first paragraph
     first_p = cell.paragraphs[0]
     for run in first_p.runs:
         run.text = ""
         rPr = run._r.find(qn('w:rPr'))
         if rPr is not None:
             run._r.remove(rPr)
-    # Write new text with newlines as separate runs separated by <w:br>
     lines = text.split("\n")
     run = first_p.add_run(lines[0])
     run.bold = bold
@@ -303,7 +297,6 @@ DELIVERY_TIME_OPTIONS = [
     "To be confirmed",
     "— custom —"
 ]
-# VAT exemptions loaded dynamically from Supabase
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -329,7 +322,7 @@ st.title("🧾 Fattura Generator")
 st.subheader("1. Date & Invoice Number")
 col_d1, col_d2 = st.columns(2)
 with col_d1:
-    selected_date = st.date_input("Date", value=date.today())
+    selected_date = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
 with col_d2:
     invoice_number = get_next_invoice_number()
     st.metric("Invoice Number", invoice_number)
@@ -368,8 +361,8 @@ else:
     default_company = default_address = default_zip = ""
     default_city = default_country = default_vat = ""
 
-company = st.text_input("Company Name", value=default_company)
-address = st.text_input("Address", value=default_address)
+company    = st.text_input("Company Name *", value=default_company)
+address    = st.text_input("Address", value=default_address)
 col3, col4, col5 = st.columns(3)
 with col3:
     zip_code = st.text_input("Zip", value=default_zip)
@@ -377,8 +370,8 @@ with col4:
     city = st.text_input("City", value=default_city)
 with col5:
     region = st.text_input("Region", placeholder="(optional)")
-country  = st.text_input("Country", value=default_country)
-vat_number = st.text_input("VAT Number / Partita IVA", value=default_vat)
+country    = st.text_input("Country", value=default_country)
+vat_number = st.text_input("Tax ID / VAT code / Partita IVA", value=default_vat)
 
 # ── 3. DELIVERY ADDRESS ──
 st.subheader("3. Delivery Address")
@@ -401,7 +394,6 @@ with col_del_refresh:
         st.rerun()
 
 if selected_delivery_idx == 0:
-    # Same as billing
     del_company = company
     del_address = address
     del_zip     = zip_code
@@ -410,7 +402,6 @@ if selected_delivery_idx == 0:
     del_country = country
     st.caption("📦 Delivery address same as billing address")
 elif selected_delivery_idx == 1:
-    # New address — manual input
     del_company = st.text_input("Delivery Company Name")
     del_address = st.text_input("Delivery Street Address")
     col_dz, col_dc = st.columns(2)
@@ -418,7 +409,7 @@ elif selected_delivery_idx == 1:
         del_zip = st.text_input("Delivery ZIP")
     with col_dc:
         del_city = st.text_input("Delivery City")
-    del_region = st.text_input("Delivery Region", placeholder="(optional)")
+    del_region  = st.text_input("Delivery Region", placeholder="(optional)")
     del_country = st.text_input("Delivery Country")
     if del_company and st.button("💾 Save this delivery address"):
         save_delivery_address(del_company, del_address, del_zip, del_city, del_country)
@@ -460,7 +451,7 @@ with col_t2:
         if vat_exemption and st.button("💾 Save this VAT exemption", key="save_vat"):
             save_vat_exemption(vat_exemption)
             st.session_state.vat_exemptions_db = load_vat_exemptions()
-            st.success(f"✅ Saved!")
+            st.success("✅ Saved!")
             st.rerun()
     elif vat_exemption_choice == "— none —":
         vat_exemption = ""
@@ -522,7 +513,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
                 needs_rerun = True
 
-            # Show Italian name as caption
             if prod_idx > 0 and prod_idx in PRODUCT_MAP:
                 it_name = PRODUCT_MAP[prod_idx].get("description", "")
                 if it_name:
@@ -587,7 +577,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             st.error(f"❌ Template not found: {e}")
             st.stop()
 
-        # ── Header paragraphs ──
         header_replacements = {
             "[COMPANY NAME]": company,
             "[Address]":      address,
@@ -600,10 +589,10 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         # ── Table 0: Invoice details ──
         t0 = doc.tables[0]
         table0_replacements = {
-            "[NNN/YY]":               invoice_number,
-            "[DD/MM/YYYY]":           formatted_date,
+            "[NNN/YY]":                 invoice_number,
+            "[DD/MM/YYYY]":             formatted_date,
             "[Partita Iva/VAT Number]": vat_number or "—",
-            "[Delivery terms]":       delivery_terms,
+            "[Delivery terms]":         delivery_terms,
         }
         for row in t0.rows:
             for cell in row.cells:
@@ -611,11 +600,9 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
 
         # ── Table 1: Payment, bank, delivery ──
         t1 = doc.tables[1]
-        # Payment row (row 0)
         set_cell_text(t1.rows[0].cells[0],
                       f"PAYMENT TERMS:\n{payment}",
                       bold=False, font_name="Verdana", font_size=10)
-        # Delivery address row (row 2)
         del_city_region = f"{del_zip} {del_city}".strip()
         if del_region:
             del_city_region += f", {del_region}"
@@ -624,8 +611,8 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         if del_address: del_lines.append(del_address)
         if del_city_region: del_lines.append(del_city_region)
         if del_country: del_lines.append(del_country)
-        del_text = "\n".join(del_lines)
-        set_cell_text(t1.rows[2].cells[0], del_text, bold=False, font_name="Verdana", font_size=10)
+        set_cell_text(t1.rows[2].cells[0], "\n".join(del_lines),
+                      bold=False, font_name="Verdana", font_size=10)
 
         # ── Table 2: Products ──
         t2 = doc.tables[2]
@@ -643,10 +630,8 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 price_str  = fmt_price(item["unit_price"])
                 total_str  = fmt_price(line_total)
 
-                # Qty cell
                 set_cell_text(cells[0], qty_str, bold=False)
 
-                # Description cell — EN bold, IT normal below
                 desc_cell  = cells[1]
                 for para in desc_cell.paragraphs:
                     for run in para.runs:
@@ -656,7 +641,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 r_en.bold = True
                 r_en.font.name = "Verdana"
                 r_en.font.size = Pt(10)
-                # Details
                 details = item.get("details", "").strip()
                 if details:
                     new_p2 = copy.deepcopy(first_para._p)
@@ -676,7 +660,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             else:
                 for cell in cells:
                     set_cell_text(cell, "")
-                # Collapse empty rows
                 trPr = row._tr.find(qn('w:trPr'))
                 if trPr is None:
                     trPr = OxmlElement('w:trPr')
@@ -703,7 +686,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         hs_row = t2.rows[17]
         set_cell_text(hs_row.cells[1], f"HS code: {hs_code}", bold=False)
 
-        # Save buffer
         buffer = io.BytesIO()
         doc.save(buffer)
         buffer.seek(0)
