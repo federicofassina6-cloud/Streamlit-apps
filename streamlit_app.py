@@ -114,8 +114,6 @@ def save_offerta(offerta_number, client_company, total_amount, currency):
     payload = {
         "number": offerta_number,
         "client_company": client_company,
-        "total_amount": total_amount,
-        "currency": currency,
     }
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/offerte",
@@ -676,19 +674,9 @@ if st.button(LBL["generate"], type="primary", use_container_width=True, disabled
                     r_name = para.add_run(full_name)
                     r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
                 else:
-                    # Collapse — clear text AND zero spacing so no blank gap
-                    for run in para.runs:
-                        run.text = ""
-                    pPr = para._p.get_or_add_pPr()
-                    existing = pPr.find(qn("w:spacing"))
-                    if existing is not None:
-                        pPr.remove(existing)
-                    spacing = OxmlElement("w:spacing")
-                    spacing.set(qn("w:before"), "0")
-                    spacing.set(qn("w:after"), "0")
-                    spacing.set(qn("w:line"), "120")
-                    spacing.set(qn("w:lineRule"), "exact")
-                    pPr.append(spacing)
+                    # Delete the paragraph entirely from the document XML
+                    p = para._p
+                    p.getparent().remove(p)
                 continue
 
             # Offer number line — bold
