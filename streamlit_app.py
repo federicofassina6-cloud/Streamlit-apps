@@ -110,10 +110,20 @@ def get_next_offerta_number():
     this_year = [n for n in existing if str(n).endswith(f"/{year_2digit}")]
     return f"{len(this_year) + 1:03d}/{year_2digit}"
 
-def save_offerta(proforma_number, client_company, total_amount, currency):
-    requests.post(f"{SUPABASE_URL}/rest/v1/offerte", headers=HEADERS,
-        json={"number": proforma_number, "client_company": client_company,
-              "total_amount": total_amount, "currency": currency, "status": "not_sent"})
+def save_offerta(offerta_number, client_company, total_amount, currency):
+    payload = {
+        "number": offerta_number,
+        "client_company": client_company,
+        "total_amount": total_amount,
+        "currency": currency,
+    }
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/offerte",
+        headers={**HEADERS, "Prefer": "return=minimal"},
+        json=payload,
+    )
+    if not r.ok:
+        st.warning(f"⚠️ Could not save to Supabase: {r.status_code} {r.text}")
     load_existing_offerta_numbers.clear()
 
 def save_delivery_term(term):
@@ -666,19 +676,19 @@ if st.button(LBL["generate"], type="primary", use_container_width=True, disabled
                     r_name = para.add_run(full_name)
                     r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
                 else:
-                    # Collapse — invisible, no blank gap
+                    # Collapse — clear text AND zero spacing so no blank gap
+                    for run in para.runs:
+                        run.text = ""
                     pPr = para._p.get_or_add_pPr()
+                    existing = pPr.find(qn("w:spacing"))
+                    if existing is not None:
+                        pPr.remove(existing)
                     spacing = OxmlElement("w:spacing")
                     spacing.set(qn("w:before"), "0")
                     spacing.set(qn("w:after"), "0")
                     spacing.set(qn("w:line"), "120")
                     spacing.set(qn("w:lineRule"), "exact")
-                    existing = pPr.find(qn("w:spacing"))
-                    if existing is not None:
-                        pPr.remove(existing)
                     pPr.append(spacing)
-                    for run in para.runs:
-                        run.font.size = Pt(1)
                 continue
 
             # Offer number line — bold
