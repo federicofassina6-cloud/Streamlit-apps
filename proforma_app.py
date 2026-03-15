@@ -1,5 +1,3 @@
-import os
-import copy
 import streamlit as st
 from docx import Document
 from docx.oxml.ns import qn
@@ -8,792 +6,563 @@ from docx.shared import Pt
 from datetime import date
 import io
 import requests
+import copy
 
-st.set_page_config(page_title="Proforma Generator", layout="wide")
+st.set_page_config(page_title="Offerta Generator", layout="wide")
 
-# ─────────────────────────────────────────────
-# PASSWORD GATE
-# ─────────────────────────────────────────────
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.title("🔒 Proforma Generator")
-    pwd = st.text_input("Enter passcode to continue:", type="password")
-    if st.button("Login"):
-        if pwd == "RAINYEAR":
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("❌ Wrong passcode.")
-    st.stop()
-
-# ─────────────────────────────────────────────
-# LANGUAGE SELECTION
-# ─────────────────────────────────────────────
-if "language" not in st.session_state:
-    st.session_state.language = None
-
-if st.session_state.language is None:
-    st.title("📄 Proforma Invoice Generator")
-    st.subheader("Select language / Seleziona lingua")
-    col_en, col_it = st.columns(2)
-    with col_en:
-        if st.button("🇬🇧  English", use_container_width=True):
-            st.session_state.language = "en"
-            st.rerun()
-    with col_it:
-        if st.button("🇮🇹  Italiano", use_container_width=True):
-            st.session_state.language = "it"
-            st.rerun()
-    st.stop()
-
-LANG = st.session_state.language
-
-# ─────────────────────────────────────────────
-# SUPABASE
-# ─────────────────────────────────────────────
 SUPABASE_URL = "https://lztrggttkgvgjouofibd.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx6dHJnZ3R0a2d2Z2pvdW9maWJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDAwNzEsImV4cCI6MjA4ODgxNjA3MX0.tbHCQtGW21C2fXCEu2FGwlsXn4kGUWOGoOqjuYyiC7A"
+SUPABASE_KEY = "sb_publishable_2kCkVA7G9VdPWiIXBGIFPw_O_0gfReQ"
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
 }
 
-# ── Cached loaders (TTL 5 min) ──────────────
+APP_PASSWORD = "VICENZA"
+
+# ─── Italian price formatting ─────────────────────────────────────────────────
+def format_price_it(value):
+    """Format as Italian price: 1.000,– or 1.000,50"""
+    try:
+        f = float(value)
+    except (ValueError, TypeError):
+        return ""
+    cents = round((f % 1) * 100)
+    int_str = f"{int(f):,}".replace(",", ".")
+    return f"{int_str},–" if cents == 0 else f"{int_str},{cents:02d}"
+
+
+def parse_price_it(s):
+    """Parse Italian-formatted price string back to float"""
+    try:
+        s = s.strip().rstrip("–").replace(".", "").replace(",", ".")
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+# ─── Supabase helpers ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load_products():
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/products", headers=HEADERS,
-        params={"select": "id,description,description_eng,unit_price_client,unit_price_reseller,category",
-                "order": "category.asc,created_at.asc"})
-    try:
-        d = r.json()
-        return d if isinstance(d, list) else []
-    except:
-        return []
+def load_contacts():
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/contacts?select=*&order=company.asc",
+        headers=HEADERS,
+    )
+    return r.json() if r.ok else []
+
 
 @st.cache_data(ttl=300)
-def load_customers():
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
-        params={"select": "id,company_name,contact_name,salutation,email,phone,address,city,zip,country,notes",
-                "order": "company_name.asc"})
-    try:
-        d = r.json()
-        return d if isinstance(d, list) else []
-    except:
-        return []
+def load_items():
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/items?select=*&order=name.asc",
+        headers=HEADERS,
+    )
+    return r.json() if r.ok else []
+
 
 @st.cache_data(ttl=300)
-def load_delivery_terms():
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/delivery_terms", headers=HEADERS,
-        params={"select": "term", "order": "created_at.asc"})
-    try:
-        d = r.json()
-        return [x["term"] for x in d] if isinstance(d, list) else []
-    except:
-        return []
-
-@st.cache_data(ttl=60)
-def load_existing_proforma_numbers():
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers=HEADERS,
-        params={"select": "proforma_number"})
-    try:
-        d = r.json()
-        return [x["proforma_number"] for x in d] if isinstance(d, list) else []
-    except:
-        return []
-
-def get_next_proforma_number():
-    year_2digit = date.today().strftime('%y')
-    existing = load_existing_proforma_numbers()
-    this_year = [n for n in existing if str(n).endswith(f"/{year_2digit}")]
-    return f"{len(this_year) + 1:03d}/{year_2digit}"
-
-def save_proforma(proforma_number, client_company, total_amount, currency):
-    requests.post(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers=HEADERS,
-        json={"proforma_number": proforma_number, "client_company": client_company,
-              "total_amount": total_amount, "currency": currency, "status": "not_sent"})
-    load_existing_proforma_numbers.clear()
-
-def save_delivery_term(term):
-    existing = load_delivery_terms()
-    if term in existing:
-        return
-    requests.post(f"{SUPABASE_URL}/rest/v1/delivery_terms", headers=HEADERS, json={"term": term})
-    load_delivery_terms.clear()
-
-def save_customer(company_name, contact_name, salutation, email, phone, address, city, zip_code, country, notes):
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
-        params={"company_name": f"eq.{company_name}", "select": "id"})
-    try:
-        if isinstance(r.json(), list) and len(r.json()) > 0:
-            return
-    except:
-        pass
-    requests.post(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
-        json={"company_name": company_name, "contact_name": contact_name,
-              "salutation": salutation, "email": email, "phone": phone,
-              "address": address, "city": city, "zip": zip_code,
-              "country": country, "notes": notes})
-    load_customers.clear()
-
-# ─────────────────────────────────────────────
-# ITALIAN PRICE FORMATTER
-# ─────────────────────────────────────────────
-def fmt_price_it(value: float) -> str:
-    """Format price Italian style: 1.000,50 or 1.000,– for round values."""
-    if value == int(value):
-        # No cents — use ,–
-        int_part = f"{int(value):,}".replace(",", ".")
-        return f"{int_part},\u2013"
-    else:
-        # Has cents
-        formatted = f"{value:,.2f}"
-        # formatted is like "1,000.50" — convert to Italian
-        int_part, dec_part = formatted.split(".")
-        int_part = int_part.replace(",", ".")
-        return f"{int_part},{dec_part}"
-
-# ─────────────────────────────────────────────
-# LANGUAGE STRINGS & OPTIONS
-# ─────────────────────────────────────────────
-if LANG == "en":
-    TEMPLATE_FILE = "proforma_template_eng.docx"
-    TITLE         = "📄 Proforma Invoice Generator 🇬🇧"
-    TOTAL_LABEL_TPL = "TOTAL PRICE \u2013 {dt} \u2013"
-    PAYMENT_OPTIONS = [
-        "In advance by T/t transfer",
-        "100% by T/T transfer at the order",
-        "50% advance, 50% before shipment",
-        "30 days from invoice date",
-        "Letter of credit at sight",
-    ]
-    DELIVERY_TIME_OPTIONS = [
-        "2 weeks from payment receipt",
-        "3 - 5 weeks from payment receipt",
-        "4 - 6 weeks from payment receipt",
-        "6 - 8 weeks from payment receipt",
-        "To be confirmed",
-    ]
-    PACKING_OPTIONS = [
-        "Included, for air shipment",
-        "Included with fumigated wooden crate, for air shipment",
-        "Included with carton box",
-        "Not included",
-    ]
-    SHIPMENT_OPTIONS = [
-        "By express courier", "By air", "By sea", "By road", "To be arranged by customer",
-    ]
-    LBL = {
-        "date": "Date", "client": "2. Client",
-        "pick_cust": "Pick existing customer or fill in manually below",
-        "reload": "🔄", "salutation": "Salutation", "contact": "Contact Full Name (optional)",
-        "company": "Company Name *", "address": "Address", "zip": "Zip", "city": "City",
-        "region": "Region", "country": "Country", "currency": "3. Currency & Price Type",
-        "cur_lbl": "Currency (ISO)", "price_type": "Price type (applies to all products)",
-        "lines": "4. Line Items", "lines_cap": "Select from catalogue.",
-        "prod": "Product #{i} (bold in document)",
-        "details": "Description / Specs (optional)", "qty": "Qty",
-        "unit_price": "Unit Price ({cur})", "remove": "🗑", "add_line": "➕ Add Line Item",
-        "terms": "5. Terms & Conditions", "hs": "HS Code", "payment": "Payment",
-        "del_terms": "Delivery Terms", "del_time": "Delivery Time", "packing": "Packing",
-        "shipment": "Shipment", "save_dt": "💾 Save this delivery term",
-        "doc_name": "6. Document Name", "file_name": "File name (without .docx)",
-        "generate": "📥 Generate Proforma Invoice",
-        "warn_company": "Please enter a company name.",
-        "warn_items": "Please add at least one line item.",
-        "success": "✅ Proforma {num} ready! Total: {cur} {total}",
-        "download": "📄 Download Word Document",
-        "custom": "— custom —", "new_cust": "— new customer —",
-        "cliente": "Cliente", "rivenditore": "Rivenditore",
-        "lang_switch": "🇮🇹 Switch to Italian",
-        "attn_toggle": "Include 'To the attention of' line?",
-        "number_label": "Proforma Number",
-        "number_hint": "Suggested next number — you can change it",
-        "number_warn": "⚠️ This number is outside the normal sequence. Continue anyway?",
-        "number_dup": "❌ This number already exists. Please choose a different one.",
-    }
-else:
-    TEMPLATE_FILE = "proforma_template_ita.docx"
-    TITLE         = "📄 Generatore Fattura Proforma 🇮🇹"
-    TOTAL_LABEL_TPL = "TOTALE \u2013 {dt} \u2013"
-    PAYMENT_OPTIONS = [
-        "Anticipato tramite bonifico bancario",
-        "100% bonifico bancario all'ordine",
-        "50% anticipo, 50% prima della spedizione",
-        "30 giorni dalla data fattura",
-        "Lettera di credito a vista",
-    ]
-    DELIVERY_TIME_OPTIONS = [
-        "2 settimane dal ricevimento pagamento",
-        "3 - 5 settimane dal ricevimento pagamento",
-        "4 - 6 settimane dal ricevimento pagamento",
-        "6 - 8 settimane dal ricevimento pagamento",
-        "Da confermare",
-    ]
-    PACKING_OPTIONS = [
-        "Incluso, per spedizione aerea",
-        "Incluso in cassa di legno fumigata, per spedizione aerea",
-        "Incluso in scatola di cartone",
-        "Non incluso",
-    ]
-    SHIPMENT_OPTIONS = [
-        "Corriere espresso", "Via aerea", "Via mare", "Via strada", "A cura del cliente",
-    ]
-    LBL = {
-        "date": "Data", "client": "2. Cliente",
-        "pick_cust": "Seleziona cliente o compila manualmente",
-        "reload": "🔄", "salutation": "Titolo", "contact": "Nome completo contatto (opzionale)",
-        "company": "Ragione sociale *", "address": "Indirizzo", "zip": "CAP", "city": "Città",
-        "region": "Provincia", "country": "Paese", "currency": "3. Valuta e tipo prezzo",
-        "cur_lbl": "Valuta (ISO)", "price_type": "Tipo prezzo (valido per tutti i prodotti)",
-        "lines": "4. Articoli", "lines_cap": "Seleziona dal catalogo.",
-        "prod": "Prodotto #{i} (grassetto nel documento)",
-        "details": "Descrizione / Specifiche (opzionale)", "qty": "Q.tà",
-        "unit_price": "Prezzo unitario ({cur})", "remove": "🗑", "add_line": "➕ Aggiungi articolo",
-        "terms": "5. Condizioni generali", "hs": "Codice HS", "payment": "Pagamento",
-        "del_terms": "Resa", "del_time": "Consegna", "packing": "Imballo",
-        "shipment": "Spedizione", "save_dt": "💾 Salva questa resa",
-        "doc_name": "6. Nome documento", "file_name": "Nome file (senza .docx)",
-        "generate": "📥 Genera Fattura Proforma",
-        "warn_company": "Inserire la ragione sociale.",
-        "warn_items": "Aggiungere almeno un articolo.",
-        "success": "✅ Proforma {num} pronta! Totale: {cur} {total}",
-        "download": "📄 Scarica documento Word",
-        "custom": "— personalizzato —", "new_cust": "— nuovo cliente —",
-        "cliente": "Cliente", "rivenditore": "Rivenditore",
-        "lang_switch": "🇬🇧 Switch to English",
-        "attn_toggle": "Includere riga 'All'attenzione di'?",
-        "number_label": "Numero Proforma",
-        "number_hint": "Numero progressivo suggerito — puoi modificarlo",
-        "number_warn": "⚠️ Questo numero è fuori dalla sequenza normale. Continuare?",
-        "number_dup": "❌ Questo numero esiste già. Sceglierne uno diverso.",
-    }
-
-HS_CODES = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.8030"]
-CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CNY", "RUB", LBL["custom"]]
-
-# ─────────────────────────────────────────────
-# LOAD DATA (cached)
-# ─────────────────────────────────────────────
-if "products_db" not in st.session_state:
-    st.session_state.products_db = load_products()
-if "customers_db" not in st.session_state:
-    st.session_state.customers_db = load_customers()
-if "delivery_terms_db" not in st.session_state:
-    st.session_state.delivery_terms_db = load_delivery_terms()
-
-PRODUCTS = st.session_state.products_db
-CATEGORIES = []
-seen_cats = []
-for p in PRODUCTS:
-    cat = p.get("category") or "Other"
-    if cat not in seen_cats:
-        seen_cats.append(cat)
-        CATEGORIES.append(cat)
-
-# Build product names — NO custom option, NO category separators in dropdown
-PRODUCT_NAMES = ["— select product —"]
-PRODUCT_MAP   = {}
-for cat in CATEGORIES:
-    cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
-    for p in cat_products:
-        desc_key = "description" if LANG == "it" else "description_eng"
-        primary  = (p.get(desc_key) or p.get("description") or "")
-        label    = primary[:55] + ("…" if len(primary) > 55 else "")
-        PRODUCT_MAP[len(PRODUCT_NAMES)] = p
-        PRODUCT_NAMES.append(label)
-
-# ─────────────────────────────────────────────
-# DOCX HELPERS
-# ─────────────────────────────────────────────
-def replace_in_paragraph(para, replacements):
-    for key, val in replacements.items():
-        full_text = "".join(run.text for run in para.runs)
-        if key not in full_text:
-            continue
-        keeper_run = None
-        for run in para.runs:
-            if key in run.text or (run.text and run.text in key):
-                keeper_run = run
-                break
-        if keeper_run is None:
-            for run in para.runs:
-                if run.bold:
-                    keeper_run = run
-                    break
-        if keeper_run is None and para.runs:
-            keeper_run = para.runs[-1]
-        new_text = full_text.replace(key, val)
-        if para.runs:
-            para.runs[0].text = new_text
-            if keeper_run and keeper_run != para.runs[0]:
-                para.runs[0].bold = keeper_run.bold
-                para.runs[0].italic = keeper_run.italic
-                if keeper_run.font.name:
-                    para.runs[0].font.name = keeper_run.font.name
-                if keeper_run.font.size:
-                    para.runs[0].font.size = keeper_run.font.size
-            for run in para.runs[1:]:
-                run.text = ""
-
-def set_para_run(para, text, bold=False, font_name="Verdana", font_size=10):
-    """Clear para and add a single run with given formatting."""
-    para.clear()
-    r = para.add_run(text)
-    r.bold = bold
-    r.font.name = font_name
-    r.font.size = Pt(font_size)
-
-def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", font_size=10):
-    for para in cell.paragraphs:
-        for run in para.runs:
-            run.text = ""
-            rPr = run._r.find(qn('w:rPr'))
-            if rPr is not None:
-                run._r.remove(rPr)
-    para = cell.paragraphs[0]
-    run = para.add_run(text)
-    run.bold = bold
-    run.italic = italic
-    run.font.name = font_name
-    run.font.size = Pt(font_size)
-
-# ─────────────────────────────────────────────
-# SESSION STATE
-# ─────────────────────────────────────────────
-if "line_items" not in st.session_state:
-    st.session_state.line_items = [
-        {"product_idx": 0, "description": "", "details": "", "qty": 1.0,
-         "unit_price": 0.0, "price_type": LBL["cliente"]}
-    ]
-
-def add_line():
-    st.session_state.line_items.append(
-        {"product_idx": 0, "description": "", "details": "", "qty": 1.0,
-         "unit_price": 0.0, "price_type": LBL["cliente"]}
+def load_offerta_numbers():
+    yr = date.today().strftime("%y")
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/offerte?select=number&year=eq.{yr}&order=number.asc",
+        headers=HEADERS,
     )
+    return [row["number"] for row in r.json()] if r.ok else []
 
-# ─────────────────────────────────────────────
-# UI
-# ─────────────────────────────────────────────
-col_title, col_lang = st.columns([5, 1])
-with col_title:
-    st.title(TITLE)
-with col_lang:
-    st.write("")
-    if st.button(LBL["lang_switch"]):
-        st.session_state.language = None
-        st.session_state.line_items = []
-        st.rerun()
 
-# ── 1. DATE & NUMBER ──────────────────────────
-st.subheader(f"1. {LBL['date']} & {LBL['number_label']}")
-col_d1, col_d2 = st.columns(2)
-with col_d1:
-    selected_date = st.date_input(LBL["date"], value=date.today(), format="DD/MM/YYYY")
-with col_d2:
-    suggested_number = get_next_proforma_number()
-    year_2digit = selected_date.strftime('%y')
-    existing_numbers = load_existing_proforma_numbers()
-
-    # Let user pick a number but block duplicates
-    proforma_number = st.text_input(
-        LBL["number_label"],
-        value=suggested_number,
-        help=LBL["number_hint"]
+def save_offerta_record(number, year, company, doc_date):
+    data = {"number": number, "year": year, "company": company, "date": doc_date}
+    requests.post(
+        f"{SUPABASE_URL}/rest/v1/offerte",
+        headers={**HEADERS, "Prefer": "return=minimal"},
+        json=data,
     )
-    # Strip whitespace
-    proforma_number = proforma_number.strip()
+    load_offerta_numbers.clear()
 
-    number_ok = True
-    if proforma_number in existing_numbers:
-        st.error(LBL["number_dup"])
-        number_ok = False
-    elif proforma_number:
-        try:
-            seq = int(proforma_number.split("/")[0])
-            expected = int(suggested_number.split("/")[0])
-            if seq != expected:
-                st.warning(LBL["number_warn"])
-        except:
-            pass
 
-formatted_date = selected_date.strftime('%d/%m/') + "\u2019" + year_2digit
-
-# ── 2. CLIENT ─────────────────────────────────
-st.subheader(LBL["client"])
-customers      = st.session_state.customers_db
-customer_names = [LBL["new_cust"]] + [
-    f"{c.get('company_name', '')} ({c.get('contact_name', '')})" for c in customers
-]
-col_cust, col_refresh = st.columns([5, 1])
-with col_cust:
-    selected_customer_idx = st.selectbox(
-        LBL["pick_cust"], range(len(customer_names)),
-        format_func=lambda x: customer_names[x], key="customer_picker"
-    )
-with col_refresh:
-    st.write("")
-    if st.button(LBL["reload"], help="Reload"):
-        load_customers.clear()
-        st.session_state.customers_db = load_customers()
-        st.rerun()
-
-if selected_customer_idx > 0:
-    cust = customers[selected_customer_idx - 1]
-    sal  = cust.get("salutation", "Mr.") or "Mr."
-    default_salutation = sal if sal in ["Mr.", "Ms.", "Dr.", "Messrs."] else "Mr."
-    default_full_name  = cust.get("contact_name", "")
-    default_company    = cust.get("company_name", "")
-    default_address    = cust.get("address", "")
-    default_zip        = cust.get("zip", "")
-    default_city       = cust.get("city", "")
-    default_region     = ""
-    default_country    = cust.get("country", "")
-else:
-    default_salutation = "Mr."
-    default_full_name = default_company = default_address = ""
-    default_zip = default_city = default_region = default_country = ""
-
-# "To the attention of" toggle
-include_attn = st.checkbox(LBL["attn_toggle"], value=True)
-
-if include_attn:
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        salutation = st.selectbox(LBL["salutation"], ["Mr.", "Ms.", "Dr.", "Messrs."],
-                                  index=["Mr.", "Ms.", "Dr.", "Messrs."].index(default_salutation))
+# ─── Login ────────────────────────────────────────────────────────────────────
+def login_screen():
+    st.title("🔐 Offerta Generator")
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        full_name = st.text_input(LBL["contact"], value=default_full_name,
-                                  placeholder="e.g. John Smith")
-else:
-    salutation = ""
-    full_name  = ""
-
-company = st.text_input(LBL["company"], value=default_company)
-address = st.text_input(LBL["address"], value=default_address)
-col3, col4, col5 = st.columns(3)
-with col3:
-    zip_code = st.text_input(LBL["zip"], value=default_zip)
-with col4:
-    city = st.text_input(LBL["city"], value=default_city)
-with col5:
-    region = st.text_input(LBL["region"], value=default_region)
-country = st.text_input(LBL["country"], value=default_country)
-
-# ── 3. CURRENCY & PRICE TYPE ──────────────────
-st.subheader(LBL["currency"])
-col_cur, col_pt = st.columns(2)
-with col_cur:
-    currency_choice = st.selectbox(LBL["cur_lbl"], CURRENCIES)
-    if currency_choice == LBL["custom"]:
-        currency = st.text_input("ISO code", placeholder="e.g. AED")
-    else:
-        currency = currency_choice
-with col_pt:
-    global_price_type = st.radio(
-        LBL["price_type"], [LBL["cliente"], LBL["rivenditore"]],
-        horizontal=True, key="global_price_type"
-    )
-    if st.session_state.get("_last_price_type") != global_price_type:
-        st.session_state["_last_price_type"] = global_price_type
-        for item in st.session_state.line_items:
-            item["price_type"] = global_price_type
-            if item.get("product_idx", 0) > 0 and item.get("product_idx") in PRODUCT_MAP:
-                pc = item.get("price_client", 0.0)
-                pr = item.get("price_reseller", 0.0)
-                item["unit_price"] = pc if global_price_type == LBL["cliente"] else pr
-        st.rerun()
-
-# ── 4. LINE ITEMS ─────────────────────────────
-st.subheader(LBL["lines"])
-st.caption(LBL["lines_cap"])
-
-items_to_remove = []
-needs_rerun = False
-for i, item in enumerate(st.session_state.line_items):
-    with st.container():
-        c1, c2, c3, c4 = st.columns([3, 1.5, 1.5, 0.4])
-        with c1:
-            prod_idx = st.selectbox(
-                LBL["prod"].replace("{i}", str(i+1)),
-                range(len(PRODUCT_NAMES)),
-                format_func=lambda x: PRODUCT_NAMES[x],
-                key=f"prod_{i}", index=item["product_idx"]
-            )
-            # Skip category separator headers (legacy guard)
-            if prod_idx > 0 and PRODUCT_NAMES[prod_idx].startswith("── "):
-                prod_idx = item["product_idx"]
-
-            if prod_idx != item["product_idx"]:
-                item["product_idx"] = prod_idx
-                if prod_idx > 0 and prod_idx in PRODUCT_MAP:
-                    p = PRODUCT_MAP[prod_idx]
-                    desc_key = "description" if LANG == "it" else "description_eng"
-                    item["description"]    = p.get(desc_key) or p.get("description") or ""
-                    item["price_client"]   = float(p.get("unit_price_client")   or 0)
-                    item["price_reseller"] = float(p.get("unit_price_reseller") or 0)
-                    item["unit_price"]     = item["price_client"] if global_price_type == LBL["cliente"] else item["price_reseller"]
-                    item["price_type"]     = global_price_type
-                else:
-                    item["description"] = ""
-                    item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
-                needs_rerun = True
-
-            # Show both language descriptions as captions
-            if prod_idx > 0 and prod_idx in PRODUCT_MAP:
-                p_sel = PRODUCT_MAP[prod_idx]
-                ita = p_sel.get("description", "")
-                eng = p_sel.get("description_eng", "")
-                if ita: st.caption(f"🇮🇹 {ita}")
-                if eng: st.caption(f"🇬🇧 {eng}")
-
-            item["details"] = st.text_input(
-                LBL["details"], value=item.get("details", ""), key=f"details_{i}")
-
-        with c2:
-            item["qty"] = st.number_input(
-                LBL["qty"], min_value=0.0, value=float(item["qty"]),
-                step=1.0, format="%.1f", key=f"qty_{i}")
-        with c3:
-            st.write(f"**{LBL['unit_price'].format(cur=currency)}**")
-            st.write(fmt_price_it(item["unit_price"]))
-        with c4:
-            st.write("")
-            st.write("")
-            if st.button(LBL["remove"], key=f"del_{i}"):
-                items_to_remove.append(i)
-
-        line_total = item["qty"] * item["unit_price"]
-        st.caption(f"Line total: {currency} {fmt_price_it(line_total)}")
-        st.divider()
-
-for i in sorted(items_to_remove, reverse=True):
-    st.session_state.line_items.pop(i)
-if items_to_remove or needs_rerun:
-    st.rerun()
-
-st.button(LBL["add_line"], on_click=add_line)
-grand_total = sum(item["qty"] * item["unit_price"] for item in st.session_state.line_items)
-st.markdown(f"### 💰 Total: {currency} {fmt_price_it(grand_total)}")
-
-# ── 5. TERMS ──────────────────────────────────
-st.subheader(LBL["terms"])
-DELIVERY_TERMS_OPTIONS = st.session_state.delivery_terms_db
-col_t1, col_t2 = st.columns(2)
-with col_t1:
-    hs_code = st.selectbox(LBL["hs"], HS_CODES + [LBL["custom"]])
-    if hs_code == LBL["custom"]:
-        hs_code = st.text_input("Custom HS Code")
-    payment = st.selectbox(LBL["payment"], PAYMENT_OPTIONS + [LBL["custom"]])
-    if payment == LBL["custom"]:
-        payment = st.text_input("Custom payment")
-    delivery_terms = st.selectbox(LBL["del_terms"], DELIVERY_TERMS_OPTIONS + [LBL["custom"]])
-    if delivery_terms == LBL["custom"]:
-        delivery_terms = st.text_input("Custom delivery terms", placeholder="e.g. DAP Tokyo")
-        if delivery_terms and delivery_terms not in DELIVERY_TERMS_OPTIONS:
-            if st.button(LBL["save_dt"], key="save_dt"):
-                save_delivery_term(delivery_terms)
-                st.session_state.delivery_terms_db = load_delivery_terms()
-                st.success(f"✅ '{delivery_terms}' saved!")
+        pwd = st.text_input("Password", type="password")
+        if st.button("Login", use_container_width=True):
+            if pwd == APP_PASSWORD:
+                st.session_state["logged_in"] = True
                 st.rerun()
-    delivery_time = st.selectbox(LBL["del_time"], DELIVERY_TIME_OPTIONS + [LBL["custom"]])
-    if delivery_time == LBL["custom"]:
-        delivery_time = st.text_input("Custom delivery time")
-with col_t2:
-    packing = st.selectbox(LBL["packing"], PACKING_OPTIONS + [LBL["custom"]])
-    if packing == LBL["custom"]:
-        packing = st.text_input("Custom packing")
-    shipment = st.selectbox(LBL["shipment"], SHIPMENT_OPTIONS + [LBL["custom"]])
-    if shipment == LBL["custom"]:
-        shipment = st.text_input("Custom shipment")
-
-# ── 6. DOC NAME ───────────────────────────────
-st.subheader(LBL["doc_name"])
-default_name = f"proforma {proforma_number.replace('/', '-')} {company}"
-doc_name = st.text_input(LBL["file_name"], value=default_name)
-
-# ── GENERATE ──────────────────────────────────
-st.divider()
-if st.button(LBL["generate"], type="primary", use_container_width=True, disabled=not number_ok):
-    if not company:
-        st.warning(LBL["warn_company"])
-    elif not any(item["description"].strip() for item in st.session_state.line_items):
-        st.warning(LBL["warn_items"])
-    else:
-        zip_city = f"{zip_code} {city}".strip()
-        if region:
-            zip_city += f", {region}"
-
-        header_replacements = {
-            f"Schio, [DD/MM/\u2019YY]": f"Schio, {formatted_date}",
-            f"[DD/MM/\u2019YY]":        formatted_date,
-            "[COMPANY NAME]":           company,
-            "[Address]":                address,
-            "[Zip] [City], [Region]":   zip_city,
-            "[Country]":                country,
-            "Mr./Ms. [Full Name]":      f"{salutation} {full_name}" if include_attn else "",
-            "[Sal.]":                   salutation,
-            "[Full Name]":              full_name,
-            "[NNN/YY]":                 proforma_number,
-        }
-
-        try:
-            template_path = os.path.join(os.path.dirname(__file__), TEMPLATE_FILE)
-            doc = Document(template_path)
-        except Exception as e:
-            st.error(f"❌ Template not found: {e}")
-            st.stop()
-
-        for para in doc.paragraphs:
-            replace_in_paragraph(para, header_replacements)
-
-        # ── Fix paragraph formatting — only company bold ──
-        for para in doc.paragraphs:
-            full = "".join(r.text for r in para.runs)
-
-            # Date paragraph (paragraph 0): "Schio, " normal + date normal (NOT bold)
-            if para == doc.paragraphs[0]:
-                para.clear()
-                r1 = para.add_run("Schio, ")
-                r1.bold = False; r1.font.name = "Verdana"; r1.font.size = Pt(10)
-                r2 = para.add_run(formatted_date)
-                r2.bold = False; r2.font.name = "Verdana"; r2.font.size = Pt(10)
-                continue
-
-            # "To the attn of" paragraph — collapse completely if not used
-            if "To the attn. of" in full or "All'attenzione" in full:
-                if include_attn and (salutation or full_name):
-                    para.clear()
-                    r_prefix = para.add_run(f"To the attn. of {salutation} ")
-                    r_prefix.bold = False; r_prefix.font.name = "Verdana"; r_prefix.font.size = Pt(10)
-                    r_name = para.add_run(full_name)
-                    r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
-                else:
-                    # Collapse: clear text and set paragraph spacing to 0
-                    para.clear()
-                    from docx.oxml import OxmlElement as _OE
-                    pPr = para._p.find(qn('w:pPr'))
-                    if pPr is None:
-                        pPr = _OE('w:pPr')
-                        para._p.insert(0, pPr)
-                    spacing = _OE('w:spacing')
-                    spacing.set(qn('w:before'), '0')
-                    spacing.set(qn('w:after'), '0')
-                    spacing.set(qn('w:line'), '240')
-                    spacing.set(qn('w:lineRule'), 'auto')
-                    # Remove existing spacing if any
-                    for existing in pPr.findall(qn('w:spacing')):
-                        pPr.remove(existing)
-                    pPr.append(spacing)
-                continue
-
-            # PROFORMA INVOICE NO line — bold
-            if "PROFORMA INVOICE NO" in full or "FATTURA PROFORMA N" in full:
-                for run in para.runs:
-                    run.bold = True
-                    run.font.name = "Verdana"
-                    run.font.size = Pt(10)
-                continue
-
-            # Company name — bold
-            if company and company in full:
-                set_para_run(para, company, bold=True)
-                continue
-
-            # All other header paragraphs — NOT bold, Verdana 10
-            for run in para.runs:
-                run.bold = False
-                run.font.name = "Verdana"
-                run.font.size = Pt(10)
-
-        # ── Product table ──
-        table    = doc.tables[0]
-        MAX_ROWS = 15
-        valid_items = [it for it in st.session_state.line_items if it["description"].strip()]
-
-        for row_idx in range(1, MAX_ROWS + 1):
-            row   = table.rows[row_idx]
-            cells = row.cells
-            if row_idx - 1 < len(valid_items):
-                item       = valid_items[row_idx - 1]
-                pos        = row_idx * 10
-                line_total = item["qty"] * item["unit_price"]
-                qty_str    = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                price_str  = fmt_price_it(item["unit_price"])
-                total_str  = fmt_price_it(line_total)
-                set_cell_text(cells[0], str(pos), bold=False)
-                # Description: bold product name, normal details
-                desc_cell  = cells[1]
-                for para in desc_cell.paragraphs:
-                    for run in para.runs:
-                        run.text = ""
-                        rPr = run._r.find(qn('w:rPr'))
-                        if rPr is not None: run._r.remove(rPr)
-                first_para = desc_cell.paragraphs[0]
-                r = first_para.add_run(item["description"])
-                r.bold = True; r.font.name = "Verdana"; r.font.size = Pt(10)
-                details = item.get("details", "").strip()
-                if details:
-                    new_p = copy.deepcopy(first_para._p)
-                    desc_cell._tc.append(new_p)
-                    second_para = desc_cell.paragraphs[-1]
-                    for run in second_para.runs:
-                        run.text = ""
-                    dr = second_para.add_run(details)
-                    dr.bold = False; dr.font.name = "Verdana"; dr.font.size = Pt(10)
-                set_cell_text(cells[2], qty_str)
-                set_cell_text(cells[3], price_str)
-                set_cell_text(cells[4], currency)
-                set_cell_text(cells[5], total_str)
             else:
-                for cell in cells:
-                    set_cell_text(cell, "")
-                # Collapse empty row
-                trPr = row._tr.find(qn('w:trPr'))
-                if trPr is None:
-                    trPr = OxmlElement('w:trPr')
-                    row._tr.insert(0, trPr)
-                existing_h = trPr.find(qn('w:trHeight'))
-                if existing_h is not None:
-                    trPr.remove(existing_h)
-                trH = OxmlElement('w:trHeight')
-                trH.set(qn('w:val'), '1'); trH.set(qn('w:hRule'), 'exact')
-                trPr.append(trH)
+                st.error("Password errata")
 
-        # Total row
-        total_row   = table.rows[MAX_ROWS + 1]
-        tcells      = total_row.cells
-        total_label = TOTAL_LABEL_TPL.format(dt=delivery_terms)
-        set_cell_text(tcells[0], total_label, bold=True)
-        set_cell_text(tcells[4], currency,    bold=True)
-        set_cell_text(tcells[5], fmt_price_it(grand_total), bold=True)
 
-        # Terms table
-        terms_table = doc.tables[1]
-        terms_map   = {0: hs_code, 1: payment, 4: delivery_terms,
-                       5: delivery_time, 6: packing, 7: shipment}
-        for row_idx, value in terms_map.items():
-            if row_idx < len(terms_table.rows):
-                set_cell_text(terms_table.rows[row_idx].cells[1], value)
+# ─── Docx helpers ────────────────────────────────────────────────────────────
+def replace_run_text(para, old, new):
+    """Replace placeholder text across runs in a paragraph."""
+    full = "".join(r.text for r in para.runs)
+    if old not in full:
+        return False
+    full = full.replace(old, new)
+    # Put all text in first run, clear the rest
+    if para.runs:
+        para.runs[0].text = full
+        for r in para.runs[1:]:
+            r.text = ""
+    return True
 
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
 
-        save_proforma(proforma_number, company, grand_total, currency)
-        if company.strip():
-            save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
-            load_customers.clear()
-            st.session_state.customers_db = load_customers()
+def set_para_bold(para, bold=True):
+    for run in para.runs:
+        if run.text.strip():
+            run.bold = bold
 
-        total_display = fmt_price_it(grand_total)
-        st.success(LBL["success"].format(num=proforma_number, cur=currency, total=total_display))
-        st.download_button(
-            label=LBL["download"], data=buffer,
-            file_name=f"{doc_name}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
+
+def collapse_paragraph(para):
+    """Make a paragraph invisible by collapsing its spacing and font size."""
+    pPr = para._p.get_or_add_pPr()
+    spacing = OxmlElement("w:spacing")
+    spacing.set(qn("w:before"), "0")
+    spacing.set(qn("w:after"), "0")
+    spacing.set(qn("w:line"), "120")
+    spacing.set(qn("w:lineRule"), "exact")
+    existing = pPr.find(qn("w:spacing"))
+    if existing is not None:
+        pPr.remove(existing)
+    pPr.append(spacing)
+    for run in para.runs:
+        run.font.size = Pt(1)
+        run.font.color.rgb = None  # keep default; size 1pt = effectively invisible
+
+
+def replace_cell_text(cell, old, new):
+    """Replace placeholder in a table cell."""
+    for para in cell.paragraphs:
+        full = "".join(r.text for r in para.runs)
+        if old in full:
+            full = full.replace(old, new)
+            if para.runs:
+                para.runs[0].text = full
+                for r in para.runs[1:]:
+                    r.text = ""
+            else:
+                para.add_run(full)
+
+
+def clear_product_row(row):
+    """Clear all cell content in an unused product row."""
+    for cell in row.cells:
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.text = ""
+            if not para.runs:
+                continue
+            # Set invisible via font size
+            for run in para.runs:
+                run.font.size = Pt(1)
+
+
+# ─── Document generation ─────────────────────────────────────────────────────
+def generate_offerta(
+    lang,
+    offer_number,
+    doc_date,
+    company,
+    address,
+    zip_code,
+    city,
+    region,
+    country,
+    include_attn,
+    salutation,
+    full_name,
+    our_ref,
+    products,        # list of dicts: {name, description, qty, unit_price, total_price, currency}
+    delivery_terms,
+    currency,
+    hs_code,
+    payment,
+    delivery_time,
+    packing,
+    shipment,
+    notes,
+):
+    template_path = (
+        "offerta_template_eng.docx" if lang == "ENG" else "offerta_template_ita.docx"
+    )
+    doc = Document(template_path)
+    paras = doc.paragraphs
+
+    # ── Header paragraphs ──
+    # Para 0: Date
+    replace_run_text(paras[0], "[DD/MM/'YY]", doc_date)
+
+    # Para 2: Company (bold)
+    replace_run_text(paras[2], "[COMPANY NAME]", company.upper())
+    set_para_bold(paras[2], True)
+
+    # Para 3: Address
+    replace_run_text(paras[3], "[Address]", address)
+    set_para_bold(paras[3], False)
+
+    # Para 4: Zip City, Region
+    zip_city = f"{zip_code} {city}".strip()
+    if region:
+        zip_city += f", {region}"
+    replace_run_text(paras[4], "[Zip] [City], [Region]", zip_city)
+    set_para_bold(paras[4], False)
+
+    # Para 5: Country
+    replace_run_text(paras[5], "[Country]", country)
+    set_para_bold(paras[5], False)
+
+    # Para 7: To the attn. of (optional)
+    attn_para = paras[7]
+    if include_attn and (salutation or full_name):
+        attn_text = f"To the attn. of {salutation} {full_name}".strip()
+        attn_text = attn_text.replace("To the attn. of  ", "To the attn. of ")
+        replace_run_text(attn_para, "To the attn. of [Sal.] [Full Name]", attn_text)
+        set_para_bold(attn_para, False)
+    else:
+        collapse_paragraph(attn_para)
+
+    # Para 9: Offer number (bold)
+    yr = doc_date.split("/")[-1][-2:] if "/" in doc_date else date.today().strftime("%y")
+    num_str = f"{int(offer_number):03d}/{yr}"
+    if lang == "ENG":
+        replace_run_text(paras[9], "[NNN/YY]", num_str)
+        # Rebuild entire line as bold
+        full_line = f"OFFER NO...: {num_str}"
+        for run in paras[9].runs:
+            run.text = ""
+        paras[9].runs[0].text = full_line
+        paras[9].runs[0].bold = True
+    else:
+        replace_run_text(paras[9], "[NNN/YY]", num_str)
+        full_line = f"OFFERTA Nr.: {num_str}"
+        for run in paras[9].runs:
+            run.text = ""
+        paras[9].runs[0].text = full_line
+        paras[9].runs[0].bold = True
+
+    # Para 11: Our ref (ENG only) / intro text (ITA – leave as is)
+    if lang == "ENG" and our_ref:
+        replace_run_text(paras[11], "Description", our_ref)
+
+    # ── Notes paragraph ──
+    # Find notes paragraph (contains placeholder text)
+    notes_placeholder = (
+        "Notes and comments (ex. VAT excluded)"
+        if lang == "ENG"
+        else "Note e commenti (ex. IVA esclusa)"
+    )
+    for para in doc.paragraphs:
+        if notes_placeholder in "".join(r.text for r in para.runs):
+            replace_run_text(para, notes_placeholder, notes if notes else notes_placeholder)
+            break
+
+    # ── Product table ──
+    prod_table = doc.tables[0]
+
+    for idx in range(15):  # rows 1-15
+        row = prod_table.rows[idx + 1]
+        cells = row.cells
+
+        if idx < len(products):
+            p = products[idx]
+            pos = str((idx + 1) * 10)
+            desc = p.get("name", "")
+            if p.get("description"):
+                desc += f" {p['description']}"
+            qty = str(p.get("qty", ""))
+            unit_p = format_price_it(p.get("unit_price", 0))
+            total_p = format_price_it(p.get("total_price", 0))
+            cur = p.get("currency", currency)
+
+            replace_cell_text(cells[0], cells[0].text, pos)
+            replace_cell_text(cells[1], cells[1].text, desc)
+            replace_cell_text(cells[2], cells[2].text, qty)
+            replace_cell_text(cells[3], cells[3].text, unit_p)
+            replace_cell_text(cells[4], cells[4].text, cur)
+            replace_cell_text(cells[5], cells[5].text, total_p)
+        else:
+            clear_product_row(row)
+
+    # Total row (row 16)
+    total_row = prod_table.rows[16]
+    total_cells = total_row.cells
+    total_sum = sum(p.get("total_price", 0) for p in products)
+    total_label = f"TOTAL PRICE – {delivery_terms} –" if delivery_terms else "TOTAL PRICE –"
+    # Cells 0-3 merged for label
+    replace_cell_text(total_cells[0], total_cells[0].text, total_label)
+    replace_cell_text(total_cells[4], total_cells[4].text, currency)
+    replace_cell_text(total_cells[5], total_cells[5].text, format_price_it(total_sum))
+
+    # ── Terms table ──
+    terms_table = doc.tables[1]
+    terms_map = {
+        "[HS code]": hs_code,
+        "[Payment]": payment,
+        "[Delivery terms]": delivery_terms,
+        "[Delivery time]": delivery_time,
+        "[Packing]": packing,
+        "[Shipments]": shipment,
+    }
+    for row in terms_table.rows:
+        for cell in row.cells:
+            for placeholder, value in terms_map.items():
+                if placeholder in cell.text:
+                    replace_cell_text(cell, placeholder, value or "")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─── Main App ────────────────────────────────────────────────────────────────
+def main_app():
+    st.title("📄 Offerta Generator")
+
+    # ── Load data ──
+    contacts = load_contacts()
+    items = load_items()
+    existing_numbers = load_offerta_numbers()
+    current_year = date.today().strftime("%y")
+
+    # Suggest next progressive number
+    next_num = (max(existing_numbers) + 1) if existing_numbers else 1
+
+    # ── Sidebar: meta fields ──
+    with st.sidebar:
+        st.header("Impostazioni")
+
+        lang = st.selectbox("🌐 Lingua / Language", ["ENG", "ITA"])
+
+        st.markdown("---")
+        st.subheader("Numero Offerta")
+
+        offer_num = st.number_input(
+            f"N. Offerta /{current_year}",
+            min_value=1,
+            max_value=999,
+            value=next_num,
+            step=1,
         )
+
+        num_ok = True
+        if offer_num in existing_numbers:
+            st.error(f"⛔ Offerta {offer_num:03d}/{current_year} esiste già!")
+            num_ok = False
+        elif offer_num > next_num:
+            st.warning(f"⚠️ Salto nella numerazione. Prossimo atteso: {next_num:03d}")
+
+        doc_date = st.date_input(
+            "Data",
+            value=date.today(),
+            format="DD/MM/YYYY",
+        )
+
+        st.markdown("---")
+        st.subheader("Valuta")
+        currency = st.selectbox("Valuta", ["EUR", "USD", "GBP", "CHF"])
+
+    # ── Contact selection ──
+    st.subheader("👤 Cliente")
+
+    company_names = [c.get("company", "") for c in contacts if c.get("company")]
+    company_names_sorted = sorted(set(company_names))
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        selected_company = st.selectbox(
+            "Azienda *",
+            options=["— Seleziona —"] + company_names_sorted,
+        )
+
+    # Autofill contact fields
+    contact_data = {}
+    if selected_company and selected_company != "— Seleziona —":
+        for c in contacts:
+            if c.get("company") == selected_company:
+                contact_data = c
+                break
+
+    with st.expander("📋 Dati cliente", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            address = st.text_input("Indirizzo", value=contact_data.get("address", ""))
+            zip_code = st.text_input("CAP", value=contact_data.get("zip_code", ""))
+            city = st.text_input("Città", value=contact_data.get("city", ""))
+        with c2:
+            region = st.text_input("Regione/Stato", value=contact_data.get("region", ""))
+            country = st.text_input("Paese", value=contact_data.get("country", ""))
+
+        include_attn = st.checkbox("📌 Includi 'To the attn. of'")
+        salutation = ""
+        full_name = ""
+        if include_attn:
+            a1, a2 = st.columns([1, 3])
+            with a1:
+                salutation = st.text_input("Titolo (Mr./Ms./Dr.)", value="Mr.")
+            with a2:
+                full_name = st.text_input(
+                    "Nome completo",
+                    value=contact_data.get("full_name", ""),
+                )
+
+    # Our ref (ENG only)
+    our_ref = ""
+    if lang == "ENG":
+        our_ref = st.text_input("Our ref. / Description")
+
+    # ── Products ──
+    st.subheader("📦 Prodotti")
+
+    # Build item options from Supabase
+    item_options = {}
+    for it in items:
+        name = it.get("name", "")
+        if name:
+            item_options[name] = it
+
+    num_products = st.number_input("Numero righe prodotto", min_value=1, max_value=15, value=1)
+
+    products = []
+    for i in range(int(num_products)):
+        st.markdown(f"**Riga {(i+1)*10}**")
+        p_col1, p_col2, p_col3, p_col4 = st.columns([3, 1, 2, 2])
+
+        with p_col1:
+            item_names = ["— Seleziona prodotto —"] + sorted(item_options.keys())
+            sel = st.selectbox(f"Prodotto", item_names, key=f"prod_{i}")
+
+        item_data = item_options.get(sel, {}) if sel != "— Seleziona prodotto —" else {}
+        default_desc = item_data.get("description", "")
+        default_price = item_data.get("unit_price", 0.0) or 0.0
+
+        with p_col2:
+            qty = st.number_input("Q.tà", min_value=0.0, value=1.0, step=1.0, key=f"qty_{i}")
+
+        with p_col3:
+            unit_price_str = st.text_input(
+                "P. Unità",
+                value=format_price_it(default_price),
+                key=f"uprice_{i}",
+                placeholder="es. 1.000,–",
+            )
+
+        unit_price = parse_price_it(unit_price_str) if unit_price_str else 0.0
+        total_price = round(unit_price * qty, 2)
+
+        with p_col4:
+            st.text_input(
+                "P. Totale",
+                value=format_price_it(total_price),
+                key=f"tprice_{i}",
+                disabled=True,
+            )
+
+        desc_input = st.text_input(
+            "Descrizione aggiuntiva (opzionale)",
+            value=default_desc,
+            key=f"desc_{i}",
+        )
+
+        if sel and sel != "— Seleziona prodotto —":
+            products.append(
+                {
+                    "name": sel,
+                    "description": desc_input,
+                    "qty": qty,
+                    "unit_price": unit_price,
+                    "total_price": total_price,
+                    "currency": currency,
+                }
+            )
+
+    # ── Terms & conditions ──
+    st.subheader("📋 Condizioni")
+
+    t1, t2 = st.columns(2)
+    with t1:
+        delivery_terms = st.text_input("Resa / Delivery terms", placeholder="es. EXW Schio")
+        payment = st.text_input("Pagamento / Payment", placeholder="es. 30 gg d.f.f.m.")
+        hs_code = st.text_input("HS Code")
+    with t2:
+        delivery_time = st.text_input("Consegna / Delivery time", placeholder="es. 8-10 weeks")
+        packing = st.text_input("Imballo / Packing", placeholder="es. Export packing")
+        shipment = st.text_input("Spedizione / Shipment", placeholder="es. By sea")
+
+    notes = st.text_area(
+        "Note / Notes",
+        placeholder="Note aggiuntive (es. VAT excluded)" if lang == "ENG" else "Note aggiuntive (es. IVA esclusa)",
+        height=80,
+    )
+
+    # ── Generate ──
+    st.markdown("---")
+
+    company_ok = selected_company and selected_company != "— Seleziona —"
+    products_ok = len(products) > 0
+
+    if not company_ok:
+        st.warning("⚠️ Seleziona un'azienda cliente")
+    if not products_ok:
+        st.warning("⚠️ Aggiungi almeno un prodotto")
+
+    generate_disabled = not (num_ok and company_ok and products_ok)
+
+    if st.button("📄 Genera Offerta", disabled=generate_disabled, type="primary", use_container_width=True):
+        with st.spinner("Generazione documento..."):
+            date_str = doc_date.strftime("%d/%m/%y")
+
+            buf = generate_offerta(
+                lang=lang,
+                offer_number=offer_num,
+                doc_date=date_str,
+                company=selected_company,
+                address=address,
+                zip_code=zip_code,
+                city=city,
+                region=region,
+                country=country,
+                include_attn=include_attn,
+                salutation=salutation,
+                full_name=full_name,
+                our_ref=our_ref,
+                products=products,
+                delivery_terms=delivery_terms,
+                currency=currency,
+                hs_code=hs_code,
+                payment=payment,
+                delivery_time=delivery_time,
+                packing=packing,
+                shipment=shipment,
+                notes=notes,
+            )
+
+            # Save to Supabase
+            save_offerta_record(
+                number=offer_num,
+                year=current_year,
+                company=selected_company,
+                doc_date=date_str,
+            )
+
+            filename = f"Offerta_{offer_num:03d}_{current_year}_{selected_company.replace(' ', '_')}.docx"
+            st.success(f"✅ Offerta {offer_num:03d}/{current_year} generata!")
+            st.download_button(
+                label="⬇️ Scarica Offerta",
+                data=buf,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+
+
+# ─── Entry point ─────────────────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if not st.session_state["logged_in"]:
+    login_screen()
+else:
+    main_app()
