@@ -61,115 +61,99 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# ── Cached loaders (TTL 5 min) ──────────────
+@st.cache_data(ttl=300)
+def load_products():
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/products", headers=HEADERS,
+        params={"select": "id,description,description_eng,unit_price_client,unit_price_reseller,category",
+                "order": "category.asc,created_at.asc"})
+    try:
+        d = r.json()
+        return d if isinstance(d, list) else []
+    except:
+        return []
+
+@st.cache_data(ttl=300)
+def load_customers():
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
+        params={"select": "id,company_name,contact_name,salutation,email,phone,address,city,zip,country,notes",
+                "order": "company_name.asc"})
+    try:
+        d = r.json()
+        return d if isinstance(d, list) else []
+    except:
+        return []
+
+@st.cache_data(ttl=300)
+def load_delivery_terms():
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/delivery_terms", headers=HEADERS,
+        params={"select": "term", "order": "created_at.asc"})
+    try:
+        d = r.json()
+        return [x["term"] for x in d] if isinstance(d, list) else []
+    except:
+        return []
+
+@st.cache_data(ttl=60)
+def load_existing_proforma_numbers():
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers=HEADERS,
+        params={"select": "proforma_number"})
+    try:
+        d = r.json()
+        return [x["proforma_number"] for x in d] if isinstance(d, list) else []
+    except:
+        return []
+
 def get_next_proforma_number():
     year_2digit = date.today().strftime('%y')
-    response = requests.get(
-        f"{SUPABASE_URL}/rest/v1/fatture_proforma",
-        headers=HEADERS,
-        params={"select": "proforma_number"}
-    )
-    try:
-        existing = response.json()
-        if isinstance(existing, list):
-            this_year = [r for r in existing if str(r.get("proforma_number", "")).endswith(f"/{year_2digit}")]
-            next_num = len(this_year) + 1
-        else:
-            next_num = 1
-    except:
-        next_num = 1
-    return f"{next_num:03d}/{year_2digit}"
+    existing = load_existing_proforma_numbers()
+    this_year = [n for n in existing if str(n).endswith(f"/{year_2digit}")]
+    return f"{len(this_year) + 1:03d}/{year_2digit}"
 
 def save_proforma(proforma_number, client_company, total_amount, currency):
-    requests.post(
-        f"{SUPABASE_URL}/rest/v1/fatture_proforma",
-        headers=HEADERS,
-        json={
-            "proforma_number": proforma_number,
-            "client_company": client_company,
-            "total_amount": total_amount,
-            "currency": currency,
-            "status": "not_sent"
-        }
-    )
-
-def load_products():
-    response = requests.get(
-        f"{SUPABASE_URL}/rest/v1/products",
-        headers=HEADERS,
-        params={"select": "id,description,description_eng,unit_price_client,unit_price_reseller,category",
-                "order": "category.asc,created_at.asc"}
-    )
-    try:
-        data = response.json()
-        if isinstance(data, list):
-            return data
-    except:
-        pass
-    return []
-
-def load_customers():
-    response = requests.get(
-        f"{SUPABASE_URL}/rest/v1/customers",
-        headers=HEADERS,
-        params={"select": "id,company_name,contact_name,salutation,email,phone,address,city,zip,country,notes",
-                "order": "company_name.asc"}
-    )
-    try:
-        data = response.json()
-        if isinstance(data, list):
-            return data
-    except:
-        pass
-    return []
-
-def load_delivery_terms():
-    response = requests.get(
-        f"{SUPABASE_URL}/rest/v1/delivery_terms",
-        headers=HEADERS,
-        params={"select": "term", "order": "created_at.asc"}
-    )
-    try:
-        data = response.json()
-        if isinstance(data, list):
-            return [r["term"] for r in data]
-    except:
-        pass
-    return []
+    requests.post(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers=HEADERS,
+        json={"proforma_number": proforma_number, "client_company": client_company,
+              "total_amount": total_amount, "currency": currency, "status": "not_sent"})
+    load_existing_proforma_numbers.clear()
 
 def save_delivery_term(term):
-    check = requests.get(
-        f"{SUPABASE_URL}/rest/v1/delivery_terms",
-        headers=HEADERS,
-        params={"term": f"eq.{term}", "select": "id"}
-    )
-    try:
-        existing = check.json()
-        if isinstance(existing, list) and len(existing) > 0:
-            return
-    except:
-        pass
+    existing = load_delivery_terms()
+    if term in existing:
+        return
     requests.post(f"{SUPABASE_URL}/rest/v1/delivery_terms", headers=HEADERS, json={"term": term})
+    load_delivery_terms.clear()
 
 def save_customer(company_name, contact_name, salutation, email, phone, address, city, zip_code, country, notes):
-    check = requests.get(
-        f"{SUPABASE_URL}/rest/v1/customers",
-        headers=HEADERS,
-        params={"company_name": f"eq.{company_name}", "select": "id"}
-    )
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
+        params={"company_name": f"eq.{company_name}", "select": "id"})
     try:
-        existing = check.json()
-        if isinstance(existing, list) and len(existing) > 0:
+        if isinstance(r.json(), list) and len(r.json()) > 0:
             return
     except:
         pass
-    requests.post(
-        f"{SUPABASE_URL}/rest/v1/customers",
-        headers=HEADERS,
+    requests.post(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
         json={"company_name": company_name, "contact_name": contact_name,
               "salutation": salutation, "email": email, "phone": phone,
               "address": address, "city": city, "zip": zip_code,
-              "country": country, "notes": notes}
-    )
+              "country": country, "notes": notes})
+    load_customers.clear()
+
+# ─────────────────────────────────────────────
+# ITALIAN PRICE FORMATTER
+# ─────────────────────────────────────────────
+def fmt_price_it(value: float) -> str:
+    """Format price Italian style: 1.000,50 or 1.000,– for round values."""
+    if value == int(value):
+        # No cents — use ,–
+        int_part = f"{int(value):,}".replace(",", ".")
+        return f"{int_part},\u2013"
+    else:
+        # Has cents
+        formatted = f"{value:,.2f}"
+        # formatted is like "1,000.50" — convert to Italian
+        int_part, dec_part = formatted.split(".")
+        int_part = int_part.replace(",", ".")
+        return f"{int_part},{dec_part}"
 
 # ─────────────────────────────────────────────
 # LANGUAGE STRINGS & OPTIONS
@@ -199,20 +183,17 @@ if LANG == "en":
         "Not included",
     ]
     SHIPMENT_OPTIONS = [
-        "By express courier",
-        "By air",
-        "By sea",
-        "By road",
-        "To be arranged by customer",
+        "By express courier", "By air", "By sea", "By road", "To be arranged by customer",
     ]
     LBL = {
-        "date": "Date", "client": "2. Client", "pick_cust": "Pick existing customer or fill in manually below",
-        "reload": "🔄", "salutation": "Salutation", "contact": "Contact Full Name",
-        "company": "Company Name", "address": "Address", "zip": "Zip", "city": "City",
+        "date": "Date", "client": "2. Client",
+        "pick_cust": "Pick existing customer or fill in manually below",
+        "reload": "🔄", "salutation": "Salutation", "contact": "Contact Full Name (optional)",
+        "company": "Company Name *", "address": "Address", "zip": "Zip", "city": "City",
         "region": "Region", "country": "Country", "currency": "3. Currency & Price Type",
         "cur_lbl": "Currency (ISO)", "price_type": "Price type (applies to all products)",
-        "lines": "4. Line Items", "lines_cap": "Select from catalogue or choose '— custom —' to type manually.",
-        "prod": "Product Name #{i} (bold in document)", "custom_prod": "Custom Product Name",
+        "lines": "4. Line Items", "lines_cap": "Select from catalogue.",
+        "prod": "Product #{i} (bold in document)",
         "details": "Description / Specs (optional)", "qty": "Qty",
         "unit_price": "Unit Price ({cur})", "remove": "🗑", "add_line": "➕ Add Line Item",
         "terms": "5. Terms & Conditions", "hs": "HS Code", "payment": "Payment",
@@ -221,13 +202,17 @@ if LANG == "en":
         "doc_name": "6. Document Name", "file_name": "File name (without .docx)",
         "generate": "📥 Generate Proforma Invoice",
         "warn_company": "Please enter a company name.",
-        "warn_contact": "Please enter a contact name.",
         "warn_items": "Please add at least one line item.",
-        "success": "✅ Proforma {num} ready! Total: {cur} {total:.2f}",
+        "success": "✅ Proforma {num} ready! Total: {cur} {total}",
         "download": "📄 Download Word Document",
         "custom": "— custom —", "new_cust": "— new customer —",
         "cliente": "Cliente", "rivenditore": "Rivenditore",
         "lang_switch": "🇮🇹 Switch to Italian",
+        "attn_toggle": "Include 'To the attention of' line?",
+        "number_label": "Proforma Number",
+        "number_hint": "Suggested next number — you can change it",
+        "number_warn": "⚠️ This number is outside the normal sequence. Continue anyway?",
+        "number_dup": "❌ This number already exists. Please choose a different one.",
     }
 else:
     TEMPLATE_FILE = "proforma_template_ita.docx"
@@ -254,20 +239,17 @@ else:
         "Non incluso",
     ]
     SHIPMENT_OPTIONS = [
-        "Corriere espresso",
-        "Via aerea",
-        "Via mare",
-        "Via strada",
-        "A cura del cliente",
+        "Corriere espresso", "Via aerea", "Via mare", "Via strada", "A cura del cliente",
     ]
     LBL = {
-        "date": "Data", "client": "2. Cliente", "pick_cust": "Seleziona cliente o compila manualmente",
-        "reload": "🔄", "salutation": "Titolo", "contact": "Nome completo contatto",
-        "company": "Ragione sociale", "address": "Indirizzo", "zip": "CAP", "city": "Città",
+        "date": "Data", "client": "2. Cliente",
+        "pick_cust": "Seleziona cliente o compila manualmente",
+        "reload": "🔄", "salutation": "Titolo", "contact": "Nome completo contatto (opzionale)",
+        "company": "Ragione sociale *", "address": "Indirizzo", "zip": "CAP", "city": "Città",
         "region": "Provincia", "country": "Paese", "currency": "3. Valuta e tipo prezzo",
         "cur_lbl": "Valuta (ISO)", "price_type": "Tipo prezzo (valido per tutti i prodotti)",
-        "lines": "4. Articoli", "lines_cap": "Seleziona dal catalogo o scegli '— personalizzato —' per inserire manualmente.",
-        "prod": "Prodotto #{i} (grassetto nel documento)", "custom_prod": "Nome prodotto personalizzato",
+        "lines": "4. Articoli", "lines_cap": "Seleziona dal catalogo.",
+        "prod": "Prodotto #{i} (grassetto nel documento)",
         "details": "Descrizione / Specifiche (opzionale)", "qty": "Q.tà",
         "unit_price": "Prezzo unitario ({cur})", "remove": "🗑", "add_line": "➕ Aggiungi articolo",
         "terms": "5. Condizioni generali", "hs": "Codice HS", "payment": "Pagamento",
@@ -276,20 +258,24 @@ else:
         "doc_name": "6. Nome documento", "file_name": "Nome file (senza .docx)",
         "generate": "📥 Genera Fattura Proforma",
         "warn_company": "Inserire la ragione sociale.",
-        "warn_contact": "Inserire il nome del contatto.",
         "warn_items": "Aggiungere almeno un articolo.",
-        "success": "✅ Proforma {num} pronta! Totale: {cur} {total:.2f}",
+        "success": "✅ Proforma {num} pronta! Totale: {cur} {total}",
         "download": "📄 Scarica documento Word",
         "custom": "— personalizzato —", "new_cust": "— nuovo cliente —",
         "cliente": "Cliente", "rivenditore": "Rivenditore",
         "lang_switch": "🇬🇧 Switch to English",
+        "attn_toggle": "Includere riga 'All'attenzione di'?",
+        "number_label": "Numero Proforma",
+        "number_hint": "Numero progressivo suggerito — puoi modificarlo",
+        "number_warn": "⚠️ Questo numero è fuori dalla sequenza normale. Continuare?",
+        "number_dup": "❌ Questo numero esiste già. Sceglierne uno diverso.",
     }
 
 HS_CODES = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.8030"]
 CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CNY", "RUB", LBL["custom"]]
 
 # ─────────────────────────────────────────────
-# LOAD DATA
+# LOAD DATA (cached)
 # ─────────────────────────────────────────────
 if "products_db" not in st.session_state:
     st.session_state.products_db = load_products()
@@ -307,15 +293,16 @@ for p in PRODUCTS:
         seen_cats.append(cat)
         CATEGORIES.append(cat)
 
-PRODUCT_NAMES = [LBL["custom"]]
+# Build product names — NO custom option
+PRODUCT_NAMES = ["— select product —"]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
+    PRODUCT_NAMES.append(f"── {cat} ──")
     for p in cat_products:
         desc_key = "description" if LANG == "it" else "description_eng"
-        primary = (p.get(desc_key) or p["description"])
-        label = primary[:50] + ("…" if len(primary) > 50 else "")
-
+        primary  = (p.get(desc_key) or p.get("description") or "")
+        label    = primary[:55] + ("…" if len(primary) > 55 else "")
         PRODUCT_MAP[len(PRODUCT_NAMES)] = p
         PRODUCT_NAMES.append(label)
 
@@ -351,6 +338,14 @@ def replace_in_paragraph(para, replacements):
                     para.runs[0].font.size = keeper_run.font.size
             for run in para.runs[1:]:
                 run.text = ""
+
+def set_para_run(para, text, bold=False, font_name="Verdana", font_size=10):
+    """Clear para and add a single run with given formatting."""
+    para.clear()
+    r = para.add_run(text)
+    r.bold = bold
+    r.font.name = font_name
+    r.font.size = Pt(font_size)
 
 def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", font_size=10):
     for para in cell.paragraphs:
@@ -394,19 +389,37 @@ with col_lang:
         st.session_state.line_items = []
         st.rerun()
 
-# ── 1. DATE & NUMBER ──
-st.subheader(f"1. {LBL['date']} & Number")
+# ── 1. DATE & NUMBER ──────────────────────────
+st.subheader(f"1. {LBL['date']} & {LBL['number_label']}")
 col_d1, col_d2 = st.columns(2)
 with col_d1:
-    selected_date = st.date_input(LBL["date"], value=date.today())
+    selected_date = st.date_input(LBL["date"], value=date.today(), format="DD/MM/YYYY")
 with col_d2:
-    proforma_number = get_next_proforma_number()
-    st.metric("Proforma Number", proforma_number)
+    suggested_number = get_next_proforma_number()
+    year_2digit = selected_date.strftime('%y')
+    existing_numbers = load_existing_proforma_numbers()
+    proforma_number = st.text_input(
+        LBL["number_label"],
+        value=suggested_number,
+        help=LBL["number_hint"]
+    )
+    # Validate number
+    number_ok = True
+    if proforma_number in existing_numbers:
+        st.error(LBL["number_dup"])
+        number_ok = False
+    else:
+        try:
+            seq = int(proforma_number.split("/")[0])
+            expected = int(suggested_number.split("/")[0])
+            if seq != expected:
+                st.warning(LBL["number_warn"])
+        except:
+            pass
 
-year_2digit  = selected_date.strftime('%y')
 formatted_date = selected_date.strftime('%d/%m/') + "\u2019" + year_2digit
 
-# ── 2. CLIENT ──
+# ── 2. CLIENT ─────────────────────────────────
 st.subheader(LBL["client"])
 customers      = st.session_state.customers_db
 customer_names = [LBL["new_cust"]] + [
@@ -421,6 +434,7 @@ with col_cust:
 with col_refresh:
     st.write("")
     if st.button(LBL["reload"], help="Reload"):
+        load_customers.clear()
         st.session_state.customers_db = load_customers()
         st.rerun()
 
@@ -440,12 +454,20 @@ else:
     default_full_name = default_company = default_address = ""
     default_zip = default_city = default_region = default_country = ""
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    salutation = st.selectbox(LBL["salutation"], ["Mr.", "Ms.", "Dr.", "Messrs."],
-                              index=["Mr.", "Ms.", "Dr.", "Messrs."].index(default_salutation))
-with col2:
-    full_name = st.text_input(LBL["contact"], value=default_full_name, placeholder="e.g. John Smith")
+# "To the attention of" toggle
+include_attn = st.checkbox(LBL["attn_toggle"], value=True)
+
+if include_attn:
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        salutation = st.selectbox(LBL["salutation"], ["Mr.", "Ms.", "Dr.", "Messrs."],
+                                  index=["Mr.", "Ms.", "Dr.", "Messrs."].index(default_salutation))
+    with col2:
+        full_name = st.text_input(LBL["contact"], value=default_full_name,
+                                  placeholder="e.g. John Smith")
+else:
+    salutation = ""
+    full_name  = ""
 
 company = st.text_input(LBL["company"], value=default_company)
 address = st.text_input(LBL["address"], value=default_address)
@@ -458,7 +480,7 @@ with col5:
     region = st.text_input(LBL["region"], value=default_region)
 country = st.text_input(LBL["country"], value=default_country)
 
-# ── 3. CURRENCY & PRICE TYPE ──
+# ── 3. CURRENCY & PRICE TYPE ──────────────────
 st.subheader(LBL["currency"])
 col_cur, col_pt = st.columns(2)
 with col_cur:
@@ -482,7 +504,7 @@ with col_pt:
                 item["unit_price"] = pc if global_price_type == LBL["cliente"] else pr
         st.rerun()
 
-# ── 4. LINE ITEMS ──
+# ── 4. LINE ITEMS ─────────────────────────────
 st.subheader(LBL["lines"])
 st.caption(LBL["lines_cap"])
 
@@ -498,52 +520,51 @@ for i, item in enumerate(st.session_state.line_items):
                 format_func=lambda x: PRODUCT_NAMES[x],
                 key=f"prod_{i}", index=item["product_idx"]
             )
+            # Skip category separator headers
+            if prod_idx > 0 and PRODUCT_NAMES[prod_idx].startswith("── "):
+                prod_idx = item["product_idx"]
+
             if prod_idx != item["product_idx"]:
                 item["product_idx"] = prod_idx
                 if prod_idx > 0 and prod_idx in PRODUCT_MAP:
                     p = PRODUCT_MAP[prod_idx]
                     desc_key = "description" if LANG == "it" else "description_eng"
-                    item["description"]    = p.get(desc_key) or p["description"]
+                    item["description"]    = p.get(desc_key) or p.get("description") or ""
                     item["price_client"]   = float(p.get("unit_price_client")   or 0)
                     item["price_reseller"] = float(p.get("unit_price_reseller") or 0)
-                    item["unit_price"] = item["price_client"] if global_price_type == LBL["cliente"] else item["price_reseller"]
-                    item["price_type"] = global_price_type
+                    item["unit_price"]     = item["price_client"] if global_price_type == LBL["cliente"] else item["price_reseller"]
+                    item["price_type"]     = global_price_type
                 else:
                     item["description"] = ""
                     item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
                 needs_rerun = True
-            # Show full descriptions as caption under dropdown
+
+            # Show both language descriptions as captions
             if prod_idx > 0 and prod_idx in PRODUCT_MAP:
-                p_selected = PRODUCT_MAP[prod_idx]
-                ita = p_selected.get("description", "")
-                eng = p_selected.get("description_eng", "")
-                if LANG == "en":
-                    if ita:
-                        st.caption(f"🇮🇹 {ita}")
-                else:
-                    if ita:
-                        st.caption(f"🇮🇹 {ita}")
-                    if eng:
-                        st.caption(f"🇬🇧 {eng}")
-            if prod_idx == 0:
-                item["description"] = st.text_input(
-                    LBL["custom_prod"], value=item["description"], key=f"desc_{i}")
+                p_sel = PRODUCT_MAP[prod_idx]
+                ita = p_sel.get("description", "")
+                eng = p_sel.get("description_eng", "")
+                if ita: st.caption(f"🇮🇹 {ita}")
+                if eng: st.caption(f"🇬🇧 {eng}")
+
             item["details"] = st.text_input(
                 LBL["details"], value=item.get("details", ""), key=f"details_{i}")
+
         with c2:
             item["qty"] = st.number_input(
                 LBL["qty"], min_value=0.0, value=float(item["qty"]),
                 step=1.0, format="%.1f", key=f"qty_{i}")
         with c3:
             st.write(f"**{LBL['unit_price'].format(cur=currency)}**")
-            st.write(f"{item['unit_price']:.2f}")
+            st.write(fmt_price_it(item["unit_price"]))
         with c4:
             st.write("")
             st.write("")
             if st.button(LBL["remove"], key=f"del_{i}"):
                 items_to_remove.append(i)
+
         line_total = item["qty"] * item["unit_price"]
-        st.caption(f"Line total: {currency} {line_total:.2f}")
+        st.caption(f"Line total: {currency} {fmt_price_it(line_total)}")
         st.divider()
 
 for i in sorted(items_to_remove, reverse=True):
@@ -553,9 +574,9 @@ if items_to_remove or needs_rerun:
 
 st.button(LBL["add_line"], on_click=add_line)
 grand_total = sum(item["qty"] * item["unit_price"] for item in st.session_state.line_items)
-st.markdown(f"### 💰 Total: {currency} {grand_total:.2f}")
+st.markdown(f"### 💰 Total: {currency} {fmt_price_it(grand_total)}")
 
-# ── 5. TERMS ──
+# ── 5. TERMS ──────────────────────────────────
 st.subheader(LBL["terms"])
 DELIVERY_TERMS_OPTIONS = st.session_state.delivery_terms_db
 col_t1, col_t2 = st.columns(2)
@@ -565,7 +586,7 @@ with col_t1:
         hs_code = st.text_input("Custom HS Code")
     payment = st.selectbox(LBL["payment"], PAYMENT_OPTIONS + [LBL["custom"]])
     if payment == LBL["custom"]:
-        payment = st.text_input("Custom")
+        payment = st.text_input("Custom payment")
     delivery_terms = st.selectbox(LBL["del_terms"], DELIVERY_TERMS_OPTIONS + [LBL["custom"]])
     if delivery_terms == LBL["custom"]:
         delivery_terms = st.text_input("Custom delivery terms", placeholder="e.g. DAP Tokyo")
@@ -586,18 +607,18 @@ with col_t2:
     if shipment == LBL["custom"]:
         shipment = st.text_input("Custom shipment")
 
-# ── 6. DOC NAME ──
+# ── 6. DOC NAME ───────────────────────────────
 st.subheader(LBL["doc_name"])
 default_name = f"proforma {proforma_number.replace('/', '-')} {company}"
 doc_name = st.text_input(LBL["file_name"], value=default_name)
 
-# ── GENERATE ──
+# ── GENERATE ──────────────────────────────────
 st.divider()
 if st.button(LBL["generate"], type="primary", use_container_width=True):
     if not company:
         st.warning(LBL["warn_company"])
-    elif not full_name:
-        st.warning(LBL["warn_contact"])
+    elif not number_ok:
+        st.error(LBL["number_dup"])
     elif not any(item["description"].strip() for item in st.session_state.line_items):
         st.warning(LBL["warn_items"])
     else:
@@ -612,7 +633,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
             "[Address]":                address,
             "[Zip] [City], [Region]":   zip_city,
             "[Country]":                country,
-            "Mr./Ms. [Full Name]":      f"{salutation} {full_name}",
+            "Mr./Ms. [Full Name]":      f"{salutation} {full_name}" if include_attn else "",
             "[Sal.]":                   salutation,
             "[Full Name]":              full_name,
             "[NNN/YY]":                 proforma_number,
@@ -628,40 +649,43 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
 
-        # Fix "To the attn. of" paragraph
+        # ── Fix paragraph formatting — only company bold ──
         for para in doc.paragraphs:
             full = "".join(r.text for r in para.runs)
-            if "To the attn. of" in full:
-                for run in para.runs:
-                    run.text = ""
-                    rPr = run._r.find(qn('w:rPr'))
-                    if rPr is not None:
-                        run._r.remove(rPr)
-                r_prefix = para.add_run(f"To the attn. of {salutation} ")
-                r_prefix.bold = False
-                r_prefix.font.name = "Verdana"
-                r_prefix.font.size = Pt(10)
-                r_name = para.add_run(full_name)
-                r_name.bold = True
-                r_name.font.name = "Verdana"
-                r_name.font.size = Pt(10)
 
-        # Date paragraph
-        date_para = doc.paragraphs[0]
-        date_para.clear()
-        r1 = date_para.add_run("Schio, ")
-        r1.bold = False; r1.font.name = "Verdana"; r1.font.size = Pt(10)
-        r2 = date_para.add_run(formatted_date)
-        r2.bold = True;  r2.font.name = "Verdana"; r2.font.size = Pt(10)
-
-        for para in doc.paragraphs:
-            if para == date_para:
+            # Date paragraph (paragraph 0): "Schio, " normal + date normal (NOT bold)
+            if para == doc.paragraphs[0]:
+                para.clear()
+                r1 = para.add_run("Schio, ")
+                r1.bold = False; r1.font.name = "Verdana"; r1.font.size = Pt(10)
+                r2 = para.add_run(formatted_date)
+                r2.bold = False; r2.font.name = "Verdana"; r2.font.size = Pt(10)
                 continue
+
+            # "To the attn of" paragraph
+            if "To the attn. of" in full or "All'attenzione" in full:
+                if include_attn and (salutation or full_name):
+                    para.clear()
+                    r_prefix = para.add_run(f"To the attn. of {salutation} ")
+                    r_prefix.bold = False; r_prefix.font.name = "Verdana"; r_prefix.font.size = Pt(10)
+                    r_name = para.add_run(full_name)
+                    r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
+                else:
+                    para.clear()
+                continue
+
+            # Company name — bold
+            if company and company in full:
+                set_para_run(para, company, bold=True)
+                continue
+
+            # All other header paragraphs — NOT bold, Verdana 10
             for run in para.runs:
+                run.bold = False
                 run.font.name = "Verdana"
                 run.font.size = Pt(10)
 
-        # Product table
+        # ── Product table ──
         table    = doc.tables[0]
         MAX_ROWS = 15
         valid_items = [it for it in st.session_state.line_items if it["description"].strip()]
@@ -670,17 +694,20 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
             row   = table.rows[row_idx]
             cells = row.cells
             if row_idx - 1 < len(valid_items):
-                item      = valid_items[row_idx - 1]
-                pos       = row_idx * 10
+                item       = valid_items[row_idx - 1]
+                pos        = row_idx * 10
                 line_total = item["qty"] * item["unit_price"]
-                qty_str   = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                price_str = f"{item['unit_price']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                total_str = f"{line_total:.2f},-"
+                qty_str    = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                price_str  = fmt_price_it(item["unit_price"])
+                total_str  = fmt_price_it(line_total)
                 set_cell_text(cells[0], str(pos), bold=False)
+                # Description: bold product name, normal details
                 desc_cell  = cells[1]
                 for para in desc_cell.paragraphs:
                     for run in para.runs:
                         run.text = ""
+                        rPr = run._r.find(qn('w:rPr'))
+                        if rPr is not None: run._r.remove(rPr)
                 first_para = desc_cell.paragraphs[0]
                 r = first_para.add_run(item["description"])
                 r.bold = True; r.font.name = "Verdana"; r.font.size = Pt(10)
@@ -700,7 +727,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
             else:
                 for cell in cells:
                     set_cell_text(cell, "")
-                # Collapse empty rows
+                # Collapse empty row
                 trPr = row._tr.find(qn('w:trPr'))
                 if trPr is None:
                     trPr = OxmlElement('w:trPr')
@@ -709,8 +736,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
                 if existing_h is not None:
                     trPr.remove(existing_h)
                 trH = OxmlElement('w:trHeight')
-                trH.set(qn('w:val'), '1')
-                trH.set(qn('w:hRule'), 'exact')
+                trH.set(qn('w:val'), '1'); trH.set(qn('w:hRule'), 'exact')
                 trPr.append(trH)
 
         # Total row
@@ -719,7 +745,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
         total_label = TOTAL_LABEL_TPL.format(dt=delivery_terms)
         set_cell_text(tcells[0], total_label, bold=True)
         set_cell_text(tcells[4], currency,    bold=True)
-        set_cell_text(tcells[5], f"{grand_total:.2f},-", bold=True)
+        set_cell_text(tcells[5], fmt_price_it(grand_total), bold=True)
 
         # Terms table
         terms_table = doc.tables[1]
@@ -736,12 +762,13 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
         save_proforma(proforma_number, company, grand_total, currency)
         if company.strip():
             save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
+            load_customers.clear()
             st.session_state.customers_db = load_customers()
 
-        st.success(LBL["success"].format(num=proforma_number, cur=currency, total=grand_total))
+        total_display = fmt_price_it(grand_total)
+        st.success(LBL["success"].format(num=proforma_number, cur=currency, total=total_display))
         st.download_button(
-            label=LBL["download"],
-            data=buffer,
+            label=LBL["download"], data=buffer,
             file_name=f"{doc_name}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
