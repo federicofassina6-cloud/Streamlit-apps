@@ -20,26 +20,7 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# ─────────────────────────────────────────────
-# AUTH
-# ─────────────────────────────────────────────
-VALID_USERS = {"admin": "rmd2024", "federico": "rmd2024"}
 
-def login():
-    st.title("🔐 Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if VALID_USERS.get(u) == p:
-            st.session_state["logged_in"] = True
-            st.session_state["username"] = u
-            st.rerun()
-        else:
-            st.error("Invalid credentials")
-
-if not st.session_state.get("logged_in"):
-    login()
-    st.stop()
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -117,11 +98,6 @@ def collapse_para(para):
 # ─────────────────────────────────────────────
 lang = st.sidebar.selectbox("🌐 Language / Lingua", ["Italiano", "English"])
 is_eng = lang == "English"
-
-st.sidebar.write(f"👤 {st.session_state['username']}")
-if st.sidebar.button("Logout"):
-    st.session_state.clear()
-    st.rerun()
 
 if is_eng:
     st.title("📄 Proforma Invoice Generator")
