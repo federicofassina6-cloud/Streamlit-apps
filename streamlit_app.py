@@ -298,7 +298,6 @@ PRODUCT_NAMES = ["— select product —"]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
-    PRODUCT_NAMES.append(f"── {cat} ──")
     for p in cat_products:
         desc_key = "description" if LANG == "it" else "description_eng"
         primary  = (p.get(desc_key) or p.get("description") or "")
@@ -520,9 +519,7 @@ for i, item in enumerate(st.session_state.line_items):
                 format_func=lambda x: PRODUCT_NAMES[x],
                 key=f"prod_{i}", index=item["product_idx"]
             )
-            # Skip category separator headers
-            if prod_idx > 0 and PRODUCT_NAMES[prod_idx].startswith("── "):
-                prod_idx = item["product_idx"]
+            # Skip category separator headers — removed (no separators)
 
             if prod_idx != item["product_idx"]:
                 item["product_idx"] = prod_idx
@@ -614,11 +611,9 @@ doc_name = st.text_input(LBL["file_name"], value=default_name)
 
 # ── GENERATE ──────────────────────────────────
 st.divider()
-if st.button(LBL["generate"], type="primary", use_container_width=True):
+if st.button(LBL["generate"], type="primary", use_container_width=True, disabled=not number_ok):
     if not company:
         st.warning(LBL["warn_company"])
-    elif not number_ok:
-        st.error(LBL["number_dup"])
     elif not any(item["description"].strip() for item in st.session_state.line_items):
         st.warning(LBL["warn_items"])
     else:
@@ -671,7 +666,25 @@ if st.button(LBL["generate"], type="primary", use_container_width=True):
                     r_name = para.add_run(full_name)
                     r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
                 else:
-                    para.clear()
+                    # Collapse — invisible, no blank gap
+                    pPr = para._p.get_or_add_pPr()
+                    spacing = OxmlElement("w:spacing")
+                    spacing.set(qn("w:before"), "0")
+                    spacing.set(qn("w:after"), "0")
+                    spacing.set(qn("w:line"), "120")
+                    spacing.set(qn("w:lineRule"), "exact")
+                    existing = pPr.find(qn("w:spacing"))
+                    if existing is not None:
+                        pPr.remove(existing)
+                    pPr.append(spacing)
+                    for run in para.runs:
+                        run.font.size = Pt(1)
+                continue
+
+            # Offer number line — bold
+            if "OFFER NO" in full or "OFFERTA Nr" in full:
+                for run in para.runs:
+                    run.bold = True
                 continue
 
             # Company name — bold
