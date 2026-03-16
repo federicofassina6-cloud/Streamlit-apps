@@ -67,7 +67,8 @@ def get_next_invoice_number():
         next_num = 1
     return f"{next_num:03d}/{year_2digit}"
 
-def save_fattura(invoice_number, client_company, total_amount, currency):
+def save_fattura(invoice_number, client_company, total_amount, currency,
+                  address="", zip_code="", city="", region="", country=""):
     requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture",
         headers=HEADERS,
@@ -76,7 +77,12 @@ def save_fattura(invoice_number, client_company, total_amount, currency):
             "client_company": client_company,
             "total_amount": total_amount,
             "currency": currency,
-            "status": "not_sent"
+            "status": "not_sent",
+            "address": address,
+            "zip": zip_code,
+            "city": city,
+            "region": region,
+            "country": country,
         }
     )
 
@@ -690,7 +696,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         doc.save(buffer)
         buffer.seek(0)
 
-        save_fattura(invoice_number, company, grand_total, currency)
+        save_fattura(invoice_number, company, grand_total, currency, address, zip_code, city, region, country)
 
         st.success(f"✅ Fattura {invoice_number} ready! Total: {currency} {fmt_price(grand_total)}")
         st.download_button(
