@@ -68,10 +68,10 @@ def get_next_invoice_number():
     return f"{next_num:03d}/{year_2digit}"
 
 def save_fattura(invoice_number, client_company, total_amount, currency,
-                  address="", zip_code="", city="", region="", country=""):
+                 address="", zip_code="", city="", region="", country=""):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture",
-        headers={**HEADERS, "Prefer": "return=minimal"},
+        headers={**HEADERS, "Prefer": "return=representation"},
         json={
             "invoice_number": invoice_number,
             "client_company": client_company,
@@ -86,13 +86,45 @@ def save_fattura(invoice_number, client_company, total_amount, currency,
         }
     )
     if not r.ok:
-        st.warning(f"⚠️ Could not save to Supabase: {r.status_code} {r.text}")
+        st.warning(f"⚠️ Could not save fattura: {r.status_code} {r.text}")
+        return None
+    data = r.json()
+    if isinstance(data, list) and data:
+        return data[0].get("id")
+    return None
+
+def save_fattura_items(fattura_id, items):
+    """Save line items linked to the fattura for use by packing list."""
+    if not fattura_id:
+        return
+    rows = []
+    for it in items:
+        if not it.get("description", "").strip():
+            continue
+        # Look up net_weight and dimensions from product map if available
+        p = PRODUCT_MAP.get(it.get("product_idx", 0), {})
+        rows.append({
+            "fattura_id":    fattura_id,
+            "description":   it.get("description", ""),
+            "description_it":it.get("description_it", ""),
+            "qty":           it.get("qty", 0),
+            "unit_price":    it.get("unit_price", 0),
+            "currency":      it.get("currency", "EUR"),
+            "net_weight_kg": float(p.get("net_weight_kg") or 0) if p else 0,
+            "dimensions":    p.get("dimensions") or "" if p else "",
+        })
+    if rows:
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/fattura_items",
+            headers={**HEADERS, "Prefer": "return=minimal"},
+            json=rows
+        )
 
 def load_products():
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/products",
         headers=HEADERS,
-        params={"select": "id,description,description_eng,unit_price_client,unit_price_reseller,category",
+        params={"select": "id,description,description_eng,unit_price_client,unit_price_reseller,category,net_weight_kg,dimensions",
                 "order": "category.asc,created_at.asc"}
     )
     try:
@@ -251,6 +283,10 @@ def replace_in_paragraph(para, replacements):
         for run in para.runs[1:]:
             run.text = ""
 
+def delete_para(para):
+    p = para._p
+    p.getparent().remove(p)
+
 # ─────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────
@@ -295,14 +331,6 @@ PAYMENT_OPTIONS = [
     "50% advance, 50% before shipment",
     "30 days from invoice date",
     "Letter of credit at sight",
-    "— custom —"
-]
-DELIVERY_TIME_OPTIONS = [
-    "2 weeks from payment receipt",
-    "3 - 5 weeks from payment receipt",
-    "4 - 6 weeks from payment receipt",
-    "6 - 8 weeks from payment receipt",
-    "To be confirmed",
     "— custom —"
 ]
 
@@ -359,17 +387,34 @@ with col_refresh:
 
 if selected_customer_idx > 0:
     cust = customers[selected_customer_idx - 1]
-    default_company  = cust.get("company_name", "")
-    default_address  = cust.get("address", "")
-    default_zip      = cust.get("zip", "")
-    default_city     = cust.get("city", "")
-    default_region   = cust.get("state", "") or ""
-    default_country  = cust.get("country", "")
-    default_vat      = cust.get("vat_number", "")
+    default_company    = cust.get("company_name", "")
+    default_address    = cust.get("address", "")
+    default_zip        = cust.get("zip", "")
+    default_city       = cust.get("city", "")
+    default_region     = cust.get("state", "") or ""
+    default_country    = cust.get("country", "")
+    default_vat        = cust.get("vat_number", "")
+    default_salutation = cust.get("salutation", "Mr.") or "Mr."
+    default_full_name  = cust.get("contact_name", "") or ""
 else:
     default_company = default_address = default_zip = ""
     default_city = default_country = default_vat = ""
     default_region = ""
+    default_salutation = "Mr."
+    default_full_name  = ""
+
+# Attn line
+include_attn = st.checkbox("Include 'To the attn. of' line?", value=False)
+salutation = ""
+full_name  = ""
+if include_attn:
+    col_s, col_n = st.columns([1, 3])
+    with col_s:
+        sal_opts = ["Mr.", "Ms.", "Dr.", "Messrs."]
+        sal_idx  = sal_opts.index(default_salutation) if default_salutation in sal_opts else 0
+        salutation = st.selectbox("Salutation", sal_opts, index=sal_idx)
+    with col_n:
+        full_name = st.text_input("Full Name (optional)", value=default_full_name)
 
 company    = st.text_input("Company Name *", value=default_company)
 address    = st.text_input("Address", value=default_address)
@@ -444,16 +489,13 @@ with col_t1:
     delivery_terms = st.selectbox("Delivery Terms", delivery_terms_options + ["— custom —"])
     if delivery_terms == "— custom —":
         delivery_terms = st.text_input("Custom Delivery Terms", placeholder="e.g. DAP Tokyo")
-
     payment = st.selectbox("Payment Terms", PAYMENT_OPTIONS)
     if payment == "— custom —":
         payment = st.text_input("Custom Payment Terms")
-
 with col_t2:
     hs_code = st.selectbox("HS Code", HS_CODES)
     if hs_code == "— custom —":
         hs_code = st.text_input("Custom HS Code")
-
     vat_options_dynamic = ["— none —"] + st.session_state.vat_exemptions_db + ["— custom —"]
     vat_exemption_choice = st.selectbox("VAT Exemption", vat_options_dynamic)
     if vat_exemption_choice == "— custom —":
@@ -587,14 +629,47 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             st.error(f"❌ Template not found: {e}")
             st.stop()
 
+        # ── Header paragraphs ──
+        # Replace placeholders first
         header_replacements = {
-            "[COMPANY NAME]": company,
+            "[COMPANY NAME]": company.upper(),
             "[Address]":      address,
             "[Zip] [City], [Region]": zip_city,
             "[Country]":      country,
         }
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
+
+        # Fix bold: only company bold, everything else not bold
+        for para in doc.paragraphs:
+            full = "".join(r.text for r in para.runs)
+            if company.upper() in full and full.strip() == company.upper():
+                for run in para.runs:
+                    run.bold = True
+                    run.font.name = "Verdana"
+                    run.font.size = Pt(10)
+            elif full.strip() in ["", "Messrs."]:
+                pass  # leave as-is
+            else:
+                for run in para.runs:
+                    if run.text.strip():
+                        run.bold = False
+                        run.font.name = "Verdana"
+                        run.font.size = Pt(10)
+
+        # Attn line — delete if not needed
+        for para in doc.paragraphs:
+            if "To the attn. of" in para.text or "All'attenzione" in para.text:
+                if include_attn and (salutation or full_name):
+                    attn_text = f"To the attn. of {salutation} {full_name}".strip().replace("  ", " ")
+                    replace_in_paragraph(para, {"To the attn. of [Sal.] [Full Name]": attn_text})
+                    for run in para.runs:
+                        run.bold = False
+                        run.font.name = "Verdana"
+                        run.font.size = Pt(10)
+                else:
+                    delete_para(para)
+                break
 
         # ── Table 0: Invoice details ──
         t0 = doc.tables[0]
@@ -700,7 +775,15 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         doc.save(buffer)
         buffer.seek(0)
 
-        save_fattura(invoice_number, company, grand_total, currency, address, zip_code, city, region, country)
+        # Save fattura + line items to Supabase
+        fattura_id = save_fattura(
+            invoice_number, company, grand_total, currency,
+            address, zip_code, city, region, country
+        )
+        # Attach currency to items for save
+        for it in st.session_state.fattura_line_items:
+            it["currency"] = currency
+        save_fattura_items(fattura_id, st.session_state.fattura_line_items)
 
         st.success(f"✅ Fattura {invoice_number} ready! Total: {currency} {fmt_price(grand_total)}")
         st.download_button(
