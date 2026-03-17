@@ -84,10 +84,10 @@ def load_existing_numbers():
 def get_next_number():
     yr = date.today().strftime('%y')
     existing = load_existing_numbers()
-    this_yr = [n for n in existing if str(n).endswith(f"/{yr}")]
-    return f"{len(this_yr)+1:03d}/{yr}"
+    this_yr = [n for n in existing if str(n).startswith("PI") and str(n).endswith(f"/{yr}")]
+    return f"PI{len(this_yr)+1:03d}/{yr}"
 
-def save_proforma(num, company, total, currency, date_of_reference=None):
+def save_proforma(num, company, total, currency, date_of_reference=None, note=None):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture_proforma",
         headers={**HDR, "Prefer": "return=representation"},
@@ -98,7 +98,7 @@ def save_proforma(num, company, total, currency, date_of_reference=None):
             "currency": currency,
             "status": "not_sent",
             "date_of_reference": date_of_reference,
-
+            "note": note,
         }
     )
     if not r.ok:
@@ -155,7 +155,8 @@ if LANG == "en":
              cust="— custom —",newcust="— new customer —",cli="Cliente",riv="Rivenditore",
              lswitch="🇮🇹 Switch to Italian",attn="Include 'To the attention of' line?",
              nlabel="Proforma Number",nhint="Suggested — you can change it",
-             nwarn="⚠️ Number outside normal sequence.",ndup="❌ This number already exists.")
+             nwarn="⚠️ Number outside normal sequence.",ndup="❌ This number already exists.",
+             note="📝 Note (optional — shown in the app)")
 else:
     TMPL = "proforma_template_ita.docx"
     TITLE = "📄 Generatore Fattura Proforma 🇮🇹"
@@ -182,7 +183,8 @@ else:
              cust="— personalizzato —",newcust="— nuovo cliente —",cli="Cliente",riv="Rivenditore",
              lswitch="🇬🇧 Switch to English",attn="Includere riga 'All'attenzione di'?",
              nlabel="Numero Proforma",nhint="Progressivo suggerito — modificabile",
-             nwarn="⚠️ Numero fuori sequenza.",ndup="❌ Numero già esistente.")
+             nwarn="⚠️ Numero fuori sequenza.",ndup="❌ Numero già esistente.",
+             note="📝 Nota (opzionale — visibile nell'app)")
 
 HS = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.8030"]
 CURS = ["EUR","USD","GBP","CHF","CNY","RUB",L["cust"]]
@@ -277,7 +279,6 @@ st.subheader(f"1. {L['date']} & {L['nlabel']}")
 cd1, cd2 = st.columns(2)
 with cd1:
     sel_date = st.date_input(L["date"], value=date.today(), format="DD/MM/YYYY")
-
 with cd2:
     yr2 = sel_date.strftime('%y')
     suggested = get_next_number()
@@ -289,12 +290,15 @@ with cd2:
         number_ok = False
     elif pnum:
         try:
-            seq = int(pnum.split("/")[0])
-            exp = int(suggested.split("/")[0])
+            seq = int(pnum.replace("PI","").split("/")[0])
+            exp = int(suggested.replace("PI","").split("/")[0])
             if seq != exp: st.warning(L["nwarn"])
         except: pass
 
 fmt_date = sel_date.strftime('%d/%m/') + "\u2019" + yr2
+
+# NOTE
+note = st.text_input(L["note"], placeholder="e.g. Spare parts order, urgent delivery")
 
 # 2. CLIENT
 st.subheader(L["client"])
@@ -555,7 +559,8 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
         doc.save(buf); buf.seek(0)
 
         save_proforma(pnum, company, grand_total, currency,
-                      date_of_reference=sel_date.strftime("%Y-%m-%d"))
+                      date_of_reference=sel_date.strftime("%Y-%m-%d"),
+                      note=note.strip() if note else None)
 
         if company.strip():
             save_customer(company, full_name, sal, address, city, zip_code, country)
