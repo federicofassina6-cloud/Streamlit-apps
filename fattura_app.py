@@ -21,6 +21,10 @@ def fmt_price(n):
         formatted = formatted + "–"
     return formatted
 
+def fmt_qty(n):
+    """Format quantity with comma: 1,0"""
+    return f"{n:.1f}".replace(".", ",")
+
 # ─────────────────────────────────────────────
 # PASSWORD GATE
 # ─────────────────────────────────────────────
@@ -49,8 +53,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def get_next_invoice_number():
+def get_next_invoice_number(fattura_type):
+    """Return next INI or INE number based on existing rows."""
     year_2digit = date.today().strftime('%y')
+    prefix = "INI" if fattura_type == "Fattura Italia" else "INE"
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/fatture",
         headers=HEADERS,
@@ -59,16 +65,21 @@ def get_next_invoice_number():
     try:
         existing = response.json()
         if isinstance(existing, list):
-            this_year = [r for r in existing if str(r.get("invoice_number", "")).endswith(f"/{year_2digit}")]
+            this_year = [
+                r for r in existing
+                if str(r.get("invoice_number", "")).startswith(prefix)
+                and str(r.get("invoice_number", "")).endswith(f"/{year_2digit}")
+            ]
             next_num = len(this_year) + 1
         else:
             next_num = 1
     except:
         next_num = 1
-    return f"{next_num:03d}/{year_2digit}"
+    return f"{prefix}{next_num:03d}/{year_2digit}"
 
 def save_fattura(invoice_number, client_company, total_amount, currency,
-                 address="", zip_code="", city="", region="", country="", date_of_reference=None):
+                 address="", zip_code="", city="", region="", country="",
+                 date_of_reference=None, note=None):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture",
         headers={**HEADERS, "Prefer": "return=representation"},
@@ -84,6 +95,7 @@ def save_fattura(invoice_number, client_company, total_amount, currency,
             "region": region,
             "country": country,
             "date_of_reference": date_of_reference,
+            "note": note,
         }
     )
     if not r.ok:
@@ -95,14 +107,12 @@ def save_fattura(invoice_number, client_company, total_amount, currency,
     return None
 
 def save_fattura_items(fattura_id, items):
-    """Save line items linked to the fattura for use by packing list."""
     if not fattura_id:
         return
     rows = []
     for it in items:
         if not it.get("description", "").strip():
             continue
-        # Look up net_weight and dimensions from product map if available
         p = PRODUCT_MAP.get(it.get("product_idx", 0), {})
         rows.append({
             "fattura_id":    fattura_id,
@@ -355,16 +365,21 @@ def add_line():
 # ─────────────────────────────────────────────
 st.title("🧾 Fattura Generator")
 
-# ── 1. DATE & NUMBER ──
-st.subheader("1. Date & Invoice Number")
-col_d1, col_d2 = st.columns(2)
+# ── 1. DATE, TYPE & NUMBER ──
+st.subheader("1. Date, Type & Invoice Number")
+col_d1, col_d2, col_d3 = st.columns(3)
 with col_d1:
     selected_date = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
 with col_d2:
-    invoice_number = get_next_invoice_number()
+    fattura_type = st.radio("Fattura Type", ["Fattura Estero", "Fattura Italia"], horizontal=True, key="fattura_type")
+with col_d3:
+    invoice_number = get_next_invoice_number(fattura_type)
     st.metric("Invoice Number", invoice_number)
 
 formatted_date = selected_date.strftime('%d/%m/%Y')
+
+# ── NOTE ──
+note = st.text_input("📝 Note (optional — shown in the app)", placeholder="e.g. Spare parts order, urgent delivery")
 
 # ── 2. CLIENT ──
 st.subheader("2. Client")
@@ -404,7 +419,6 @@ else:
     default_salutation = "Mr."
     default_full_name  = ""
 
-# Attn line
 include_attn = st.checkbox("Include 'To the attn. of' line?", value=False)
 salutation = ""
 full_name  = ""
@@ -631,7 +645,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             st.stop()
 
         # ── Header paragraphs ──
-        # Replace placeholders first
         header_replacements = {
             "[COMPANY NAME]": company.upper(),
             "[Address]":      address,
@@ -641,16 +654,11 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         for para in doc.paragraphs:
             replace_in_paragraph(para, header_replacements)
 
-        # Fix bold: only company bold, everything else not bold
+        # Nothing bold in header paragraphs
         for para in doc.paragraphs:
             full = "".join(r.text for r in para.runs)
-            if company.upper() in full and full.strip() == company.upper():
-                for run in para.runs:
-                    run.bold = True
-                    run.font.name = "Verdana"
-                    run.font.size = Pt(10)
-            elif full.strip() in ["", "Messrs."]:
-                pass  # leave as-is
+            if full.strip() in ["", "Messrs."]:
+                pass
             else:
                 for run in para.runs:
                     if run.text.strip():
@@ -658,7 +666,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                         run.font.name = "Verdana"
                         run.font.size = Pt(10)
 
-        # Attn line — delete if not needed
+        # Attn line
         for para in doc.paragraphs:
             if "To the attn. of" in para.text or "All'attenzione" in para.text:
                 if include_attn and (salutation or full_name):
@@ -672,7 +680,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                     delete_para(para)
                 break
 
-        # ── Table 0: Invoice details ──
+        # ── Table 0: Invoice details — invoice number BOLD ──
         t0 = doc.tables[0]
         table0_replacements = {
             "[NNN/YY]":                 invoice_number,
@@ -683,6 +691,14 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         for row in t0.rows:
             for cell in row.cells:
                 replace_in_table_cell(cell, table0_replacements)
+                # Make invoice number bold, everything else not bold
+                for para in cell.paragraphs:
+                    full = "".join(r.text for r in para.runs)
+                    is_invoice = invoice_number in full
+                    for run in para.runs:
+                        run.bold = is_invoice
+                        run.font.name = "Verdana"
+                        run.font.size = Pt(10)
 
         # ── Table 1: Payment, bank, delivery ──
         t1 = doc.tables[1]
@@ -712,7 +728,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             if row_idx - 1 < len(valid_items):
                 item       = valid_items[row_idx - 1]
                 line_total = item["qty"] * item["unit_price"]
-                qty_str    = f"{item['qty']:.1f}"
+                qty_str    = fmt_qty(item["qty"])  # comma format: 1,0
                 price_str  = fmt_price(item["unit_price"])
                 total_str  = fmt_price(line_total)
 
@@ -723,8 +739,9 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                     for run in para.runs:
                         run.text = ""
                 first_para = desc_cell.paragraphs[0]
+                # Description NOT bold
                 r_en = first_para.add_run(item["description"])
-                r_en.bold = True
+                r_en.bold = False
                 r_en.font.name = "Verdana"
                 r_en.font.size = Pt(10)
                 details = item.get("details", "").strip()
@@ -758,7 +775,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 trH.set(qn('w:hRule'), 'exact')
                 trPr.append(trH)
 
-        # ── Total row (row 16) ──
+        # ── Total row (row 16) — BOLD ──
         total_row  = t2.rows[16]
         tcells     = total_row.cells
         total_label = f"TOTAL AMOUNT \u2013 {delivery_terms} \u2013"
@@ -776,13 +793,12 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         doc.save(buffer)
         buffer.seek(0)
 
-        # Save fattura + line items to Supabase
         fattura_id = save_fattura(
             invoice_number, company, grand_total, currency,
             address, zip_code, city, region, country,
-            date_of_reference=selected_date.strftime("%Y-%m-%d")
+            date_of_reference=selected_date.strftime("%Y-%m-%d"),
+            note=note.strip() if note else None,
         )
-        # Attach currency to items for save
         for it in st.session_state.fattura_line_items:
             it["currency"] = currency
         save_fattura_items(fattura_id, st.session_state.fattura_line_items)
