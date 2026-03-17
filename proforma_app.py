@@ -102,6 +102,8 @@ def save_proforma(num, company, total, currency, date_of_reference=None):
     )
     if not r.ok:
         st.warning(f"⚠️ Could not save: {r.status_code} {r.text}")
+    else:
+        st.write(f"DEBUG response: {r.json()}")
     load_existing_numbers.clear()
 
 def save_delivery_term(term):
@@ -552,6 +554,7 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
         buf = io.BytesIO()
         doc.save(buf); buf.seek(0)
 
+        st.write(f"DEBUG: date = {sel_date} | type = {type(sel_date)} | formatted = {sel_date.strftime('%Y-%m-%d')}")
         save_proforma(pnum, company, grand_total, currency,
                       date_of_reference=sel_date.strftime("%Y-%m-%d"))
 
