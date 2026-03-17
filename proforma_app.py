@@ -97,7 +97,7 @@ def save_proforma(num, company, total, currency, date_of_reference=None):
             "total_amount": total,
             "currency": currency,
             "status": "not_sent",
-            "date_of_reference": date_of_reference,
+            "proforma_date": date_of_reference,
         }
     )
     if not r.ok:
