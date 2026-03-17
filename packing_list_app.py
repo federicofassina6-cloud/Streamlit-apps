@@ -53,7 +53,7 @@ def load_fatture():
     response = requests.get(
         f"{SUPABASE_URL}/rest/v1/fatture",
         headers=HEADERS,
-        params={"select": "id,invoice_number,client_company,created_at,address,zip,city,region,country",
+        params={"select": "id,invoice_number,client_company,created_at,date_of_reference,address,zip,city,region,country",
                 "order": "created_at.desc"}
     )
     try:
@@ -97,11 +97,12 @@ def load_pl_numbers():
         pass
     return 1
 
-def save_pl_record(pl_number, client_company):
+def save_pl_record(pl_number, client_company, date_of_reference=None):
     requests.post(
         f"{SUPABASE_URL}/rest/v1/packing_lists",
         headers={**HEADERS, "Prefer": "return=minimal"},
-        json={"pl_number": pl_number, "client_company": client_company}
+        json={"pl_number": pl_number, "client_company": client_company,
+              "date_of_reference": date_of_reference}
     )
 
 # ─────────────────────────────────────────────
@@ -204,7 +205,7 @@ sel_fattura    = fatture[sel_fattura_idx]
 fattura_id     = sel_fattura.get("id", "")
 invoice_number = sel_fattura.get("invoice_number", "")
 client_company = sel_fattura.get("client_company", "")
-fat_date_raw   = sel_fattura.get("created_at", "")
+fat_date_raw   = sel_fattura.get("date_of_reference") or ""
 try:
     fattura_date = date.fromisoformat(fat_date_raw[:10]).strftime("%d/%m/%Y")
 except:
@@ -484,7 +485,7 @@ if st.button("📥 Generate Packing List", type="primary", use_container_width=T
         doc.save(buffer)
         buffer.seek(0)
 
-        save_pl_record(pl_number, company)
+        save_pl_record(pl_number, company, date_of_reference=fat_date_raw[:10] if fat_date_raw else None)
 
         st.success(f"✅ Packing List {pl_number} ready!")
         st.download_button(
