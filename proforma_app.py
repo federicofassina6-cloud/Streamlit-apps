@@ -87,9 +87,12 @@ def get_next_number():
     this_yr = [n for n in existing if str(n).endswith(f"/{yr}")]
     return f"{len(this_yr)+1:03d}/{yr}"
 
-def save_proforma(num, company, total, currency):
-    requests.post(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers=HDR,
-        json={"proforma_number":num,"client_company":company,"total_amount":total,"currency":currency,"status":"not_sent"})
+def save_proforma(num, company, total, currency, date_of_reference=None):
+    r = requests.post(f"{SUPABASE_URL}/rest/v1/fatture_proforma", headers={**HDR, "Prefer": "return=minimal"},
+        json={"proforma_number":num,"client_company":company,"total_amount":total,"currency":currency,"status":"not_sent",
+              "date_of_reference":date_of_reference})
+    if not r.ok:
+        st.warning(f"⚠️ Could not save: {r.status_code} {r.text}")
     load_existing_numbers.clear()
 
 def save_delivery_term(term):
@@ -555,7 +558,7 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
         buf = io.BytesIO()
         doc.save(buf); buf.seek(0)
 
-        save_proforma(pnum, company, grand_total, currency)
+        save_proforma(pnum, company, grand_total, currency, date_of_reference=sel_date.strftime("%Y-%m-%d"))
         if company.strip():
             save_customer(company, full_name, sal, address, city, zip_code, country)
             load_customers.clear()
