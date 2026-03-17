@@ -110,10 +110,11 @@ def get_next_offerta_number():
     this_year = [n for n in existing if str(n).endswith(f"/{year_2digit}")]
     return f"{len(this_year) + 1:03d}/{year_2digit}"
 
-def save_offerta(offerta_number, client_company, total_amount, currency):
+def save_offerta(offerta_number, client_company, total_amount, currency, date_of_reference=None):
     payload = {
         "offer_number": offerta_number,
         "client_company": client_company,
+        "date_of_reference": date_of_reference,
     }
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/offerte",
@@ -770,7 +771,7 @@ if st.button(LBL["generate"], type="primary", use_container_width=True, disabled
         doc.save(buffer)
         buffer.seek(0)
 
-        save_offerta(proforma_number, company, grand_total, currency)
+        save_offerta(proforma_number, company, grand_total, currency, date_of_reference=selected_date.strftime("%Y-%m-%d"))
         if company.strip():
             save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
             load_customers.clear()
