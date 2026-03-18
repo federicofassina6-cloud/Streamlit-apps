@@ -79,7 +79,7 @@ def get_next_invoice_number(fattura_type):
 
 def save_fattura(invoice_number, client_company, total_amount, currency,
                  address="", zip_code="", city="", region="", country="",
-                 date_of_reference=None, note=None):
+                 date_of_reference=None, note=None, payment_terms=None):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture",
         headers={**HEADERS, "Prefer": "return=representation"},
@@ -96,6 +96,7 @@ def save_fattura(invoice_number, client_company, total_amount, currency,
             "country": country,
             "date_of_reference": date_of_reference,
             "note": note,
+            "payment_terms": payment_terms,
         }
     )
     if not r.ok:
@@ -188,6 +189,27 @@ def load_delivery_terms():
     except:
         pass
     return []
+
+def load_payment_terms():
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/payment_terms",
+        headers=HEADERS,
+        params={"select": "term", "order": "created_at.asc"}
+    )
+    try:
+        data = response.json()
+        if isinstance(data, list):
+            return [r["term"] for r in data]
+    except:
+        pass
+    return []
+
+def save_payment_term(term):
+    existing = load_payment_terms()
+    if term in existing:
+        return
+    requests.post(f"{SUPABASE_URL}/rest/v1/payment_terms", headers=HEADERS, json={"term": term})
+    load_payment_terms.clear() if hasattr(load_payment_terms, "clear") else None
 
 def save_delivery_address(company_name, street_address, zip_code, city, country):
     check = requests.get(
@@ -309,6 +331,8 @@ if "delivery_db" not in st.session_state:
     st.session_state.delivery_db = load_delivery_addresses()
 if "delivery_terms_db" not in st.session_state:
     st.session_state.delivery_terms_db = load_delivery_terms()
+if "payment_terms_db" not in st.session_state:
+    st.session_state.payment_terms_db = load_payment_terms()
 if "vat_exemptions_db" not in st.session_state:
     st.session_state.vat_exemptions_db = load_vat_exemptions()
 
@@ -321,7 +345,7 @@ for p in PRODUCTS:
         seen_cats.append(cat)
         CATEGORIES.append(cat)
 
-PRODUCT_NAMES = ["— custom —"]
+PRODUCT_NAMES = ["— custom item —"]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
@@ -336,14 +360,6 @@ for cat in CATEGORIES:
 # ─────────────────────────────────────────────
 CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CNY", "RUB", "— custom —"]
 HS_CODES = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.8030","— custom —"]
-PAYMENT_OPTIONS = [
-    "In advance by T/t transfer",
-    "100% by T/T transfer at the order",
-    "50% advance, 50% before shipment",
-    "30 days from invoice date",
-    "Letter of credit at sight",
-    "— custom —"
-]
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -504,9 +520,16 @@ with col_t1:
     delivery_terms = st.selectbox("Delivery Terms", delivery_terms_options + ["— custom —"])
     if delivery_terms == "— custom —":
         delivery_terms = st.text_input("Custom Delivery Terms", placeholder="e.g. DAP Tokyo")
-    payment = st.selectbox("Payment Terms", PAYMENT_OPTIONS)
+    payment_terms_options = st.session_state.payment_terms_db
+    payment = st.selectbox("Payment Terms", payment_terms_options + ["— custom —"])
     if payment == "— custom —":
-        payment = st.text_input("Custom Payment Terms")
+        payment = st.text_input("Custom Payment Terms", placeholder="e.g. 60 days from invoice")
+        if payment and payment not in payment_terms_options:
+            if st.button("💾 Save this payment term", key="save_pt"):
+                save_payment_term(payment)
+                st.session_state.payment_terms_db = load_payment_terms()
+                st.success(f"✅ '{payment}' saved!")
+                st.rerun()
 with col_t2:
     hs_code = st.selectbox("HS Code", HS_CODES)
     if hs_code == "— custom —":
@@ -550,7 +573,7 @@ with col_pt:
 
 # ── 6. LINE ITEMS ──
 st.subheader("6. Line Items")
-st.caption("Select from catalogue or choose '— custom —' to type manually.")
+st.caption("Select from catalogue or choose '— custom item —' to type manually.")
 
 items_to_remove = []
 needs_rerun = False
@@ -798,6 +821,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             address, zip_code, city, region, country,
             date_of_reference=selected_date.strftime("%Y-%m-%d"),
             note=note.strip() if note else None,
+            payment_terms=payment if payment != "— custom —" else payment,
         )
         for it in st.session_state.fattura_line_items:
             it["currency"] = currency
