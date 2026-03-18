@@ -110,11 +110,12 @@ def get_next_offerta_number():
     this_year = [n for n in existing if str(n).startswith("OF") and str(n).endswith(f"/{year_2digit}")]
     return f"OF{len(this_year) + 1:03d}/{year_2digit}"
 
-def save_offerta(offerta_number, client_company, total_amount, currency, date_of_reference=None):
+def save_offerta(offerta_number, client_company, total_amount, currency, date_of_reference=None, payment_terms=None):
     payload = {
         "offer_number": offerta_number,
         "client_company": client_company,
         "date_of_reference": date_of_reference,
+        "payment_terms": payment_terms,
     }
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/offerte",
@@ -131,6 +132,20 @@ def save_delivery_term(term):
         return
     requests.post(f"{SUPABASE_URL}/rest/v1/delivery_terms", headers=HEADERS, json={"term": term})
     load_delivery_terms.clear()
+
+def load_payment_terms():
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/payment_terms", headers=HEADERS,
+        params={"select": "term", "order": "created_at.asc"})
+    try:
+        d = r.json()
+        return [x["term"] for x in d] if isinstance(d, list) else []
+    except:
+        return []
+
+def save_payment_term(term):
+    existing = load_payment_terms()
+    if term in existing: return
+    requests.post(f"{SUPABASE_URL}/rest/v1/payment_terms", headers=HEADERS, json={"term": term})
 
 def save_customer(company_name, contact_name, salutation, email, phone, address, city, zip_code, country, notes):
     r = requests.get(f"{SUPABASE_URL}/rest/v1/customers", headers=HEADERS,
@@ -288,6 +303,8 @@ if "customers_db" not in st.session_state:
     st.session_state.customers_db = load_customers()
 if "delivery_terms_db" not in st.session_state:
     st.session_state.delivery_terms_db = load_delivery_terms()
+if "payment_terms_db" not in st.session_state:
+    st.session_state.payment_terms_db = load_payment_terms()
 
 PRODUCTS = st.session_state.products_db
 CATEGORIES = []
@@ -579,9 +596,16 @@ with col_t1:
     hs_code = st.selectbox(LBL["hs"], HS_CODES + [LBL["custom"]])
     if hs_code == LBL["custom"]:
         hs_code = st.text_input("Custom HS Code")
-    payment = st.selectbox(LBL["payment"], PAYMENT_OPTIONS + [LBL["custom"]])
+    payment_terms_options = st.session_state.payment_terms_db
+    payment = st.selectbox(LBL["payment"], payment_terms_options + [LBL["custom"]])
     if payment == LBL["custom"]:
-        payment = st.text_input("Custom payment")
+        payment = st.text_input("Custom payment", key="custom_pay")
+        if payment and payment not in payment_terms_options:
+            if st.button("💾 Save this payment term", key="save_pt"):
+                save_payment_term(payment)
+                st.session_state.payment_terms_db = load_payment_terms()
+                st.success(f"✅ '{payment}' saved!")
+                st.rerun()
     delivery_terms = st.selectbox(LBL["del_terms"], DELIVERY_TERMS_OPTIONS + [LBL["custom"]])
     if delivery_terms == LBL["custom"]:
         delivery_terms = st.text_input("Custom delivery terms", placeholder="e.g. DAP Tokyo")
@@ -749,7 +773,8 @@ if st.button(LBL["generate"], type="primary", use_container_width=True, disabled
         buffer.seek(0)
 
         save_offerta(proforma_number, company, grand_total, currency,
-                     date_of_reference=selected_date.strftime("%Y-%m-%d"))
+                     date_of_reference=selected_date.strftime("%Y-%m-%d"),
+                     payment_terms=payment)
         if company.strip():
             save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
             load_customers.clear()
