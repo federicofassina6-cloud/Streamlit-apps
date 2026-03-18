@@ -286,35 +286,56 @@ def delete_para(para):
 
 def bold_tc_heading(doc, heading_text):
     """
-    Find the Terms & Conditions / Condizioni Generali heading anywhere
-    in the document (paragraphs + table cells) and force it bold.
+    Find T&C heading anywhere in the document and force bold.
+    Handles: split runs, text boxes, headers/footers, case variations.
     """
-    for para in doc.paragraphs:
+    heading_upper = heading_text.upper()
+
+    def _bold_para(para):
         full = "".join(r.text for r in para.runs)
-        if heading_text in full:
-            if len(para.runs) > 1:
-                para.runs[0].text = full
-                for r in para.runs[1:]:
-                    r.text = ""
-            for r in para.runs:
-                r.bold = True
-                r.font.name = "Verdana"
-                r.font.size = Pt(10)
-            return  # found — stop
-    # Also check inside tables
+        if heading_upper in full.upper():
+            # Consolidate into one run so formatting is clean
+            para.runs[0].text = full
+            for r in para.runs[1:]:
+                r.text = ""
+            para.runs[0].bold = True
+            para.runs[0].font.name = "Verdana"
+            para.runs[0].font.size = Pt(10)
+            return True
+        return False
+
+    # 1. Body paragraphs
+    for para in doc.paragraphs:
+        if _bold_para(para): return
+
+    # 2. Table cells
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
-                    full = "".join(r.text for r in para.runs)
-                    if heading_text in full:
-                        if len(para.runs) > 1:
-                            para.runs[0].text = full
-                            for r in para.runs[1:]:
-                                r.text = ""
-                        for r in para.runs:
-                            r.bold = True
-                        return
+                    if _bold_para(para): return
+
+    # 3. Text boxes / drawing objects in body
+    from docx.oxml.ns import nsmap as _nsmap
+    body = doc.element.body
+    for txbx in body.iter(qn('w:txbxContent')):
+        for p_el in txbx.iter(qn('w:p')):
+            runs_text = "".join(
+                r.text for r in p_el.iter(qn('w:r'))
+                for t in r.iter(qn('w:t'))
+                for text in [t.text or ""]
+            )
+            if heading_upper in runs_text.upper():
+                for r_el in p_el.iter(qn('w:r')):
+                    rPr = r_el.find(qn('w:rPr'))
+                    if rPr is None:
+                        rPr = OxmlElement('w:rPr')
+                        r_el.insert(0, rPr)
+                    b = rPr.find(qn('w:b'))
+                    if b is None:
+                        b = OxmlElement('w:b')
+                        rPr.append(b)
+                return
 
 # ─── SESSION STATE ───────────────────────────
 if "line_items" not in st.session_state:
@@ -451,17 +472,48 @@ for i, item in enumerate(st.session_state.line_items):
             if pidx == 0:
                 item["description"] = st.text_input(
                     "Custom Product Name", value=item.get("description",""), key=f"desc_{i}")
-                item["unit_price"] = st.number_input(
-                    f"Unit Price ({currency})", min_value=0.0, value=float(item.get("unit_price",0.0)),
-                    step=0.01, format="%.2f", key=f"up_{i}")
             item["details"] = st.text_input(L["details"], value=item.get("details",""), key=f"d_{i}")
+
+            # Unit price — always editable; pre-filled from DB list price for catalogue items
+            is_cat = pidx > 0 and pidx in PMAP
+            db_price = 0.0
+            if is_cat:
+                p_ref = PMAP[pidx]
+                pc = float(p_ref.get("unit_price_client") or 0)
+                pr = float(p_ref.get("unit_price_reseller") or 0)
+                db_price = pc if gpt == L["cli"] else pr
+
+            item["unit_price"] = st.number_input(
+                L["uprice"].format(c=currency),
+                min_value=0.0,
+                value=float(item.get("unit_price", db_price if is_cat else 0.0)),
+                step=0.01, format="%.2f",
+                key=f"up_{i}"
+            )
+
+            # Discount / surcharge indicator for catalogue items
+            if is_cat and db_price > 0:
+                entered = float(item.get("unit_price", 0.0))
+                if abs(entered - db_price) > 0.001:
+                    diff_pct = ((entered - db_price) / db_price) * 100
+                    diff_abs = entered - db_price
+                    if entered < db_price:
+                        st.caption(
+                            f"🔴 Discount: −{currency} {fmt_it(abs(diff_abs))} "
+                            f"({abs(diff_pct):.1f}% below list of {currency} {fmt_it(db_price)})"
+                        )
+                    else:
+                        st.caption(
+                            f"🟢 Surcharge: +{currency} {fmt_it(diff_abs)} "
+                            f"({diff_pct:.1f}% above list of {currency} {fmt_it(db_price)})"
+                        )
         with lc2:
             item["qty"] = st.number_input(L["qty"], min_value=0.0, value=float(item["qty"]),
                 step=1.0, format="%.1f", key=f"q_{i}")
         with lc3:
-            if pidx > 0:
-                st.write(f"**{L['uprice'].format(c=currency)}**")
-                st.write(fmt_it(item["unit_price"]))
+            lt = item["qty"] * item["unit_price"]
+            st.write(f"**Line Total ({currency})**")
+            st.write(fmt_it(lt))
         with lc4:
             st.write(""); st.write("")
             if st.button(L["rm"], key=f"r_{i}"): to_rm.append(i)
