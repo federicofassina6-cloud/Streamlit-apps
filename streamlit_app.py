@@ -106,7 +106,6 @@ def load_existing_offerta_numbers():
 def get_next_offerta_number():
     year_2digit = date.today().strftime('%y')
     existing = load_existing_offerta_numbers()
-    # Only count OF-prefixed numbers for this year
     this_year = [n for n in existing if str(n).startswith("OF") and str(n).endswith(f"/{year_2digit}")]
     return f"OF{len(this_year) + 1:03d}/{year_2digit}"
 
@@ -182,6 +181,8 @@ if LANG == "en":
     TEMPLATE_FILE = "offerta_template_eng.docx"
     TITLE         = "📄 Offer Generator 🇬🇧"
     TOTAL_LABEL_TPL = "TOTAL PRICE \u2013 {dt} \u2013"
+    # Heading text exactly as it appears in the English template
+    TC_HEADING = "TERMS AND CONDITIONS"
     PAYMENT_OPTIONS = [
         "In advance by T/t transfer",
         "100% by T/T transfer at the order",
@@ -223,6 +224,8 @@ if LANG == "en":
         "generate": "📥 Generate Offer",
         "warn_company": "Please enter a company name.",
         "warn_items": "Please add at least one line item.",
+        # Validation for attn field when toggled but name is empty
+        "warn_attn": "Please enter the contact's full name. It is required when 'To the attention of' is selected.",
         "success": "✅ Offerta {num} ready! Total: {cur} {total}",
         "download": "📄 Download Word Document",
         "custom": "— custom —", "new_cust": "— new customer —",
@@ -238,6 +241,8 @@ else:
     TEMPLATE_FILE = "offerta_template_ita.docx"
     TITLE         = "📄 Generatore Offerta 🇮🇹"
     TOTAL_LABEL_TPL = "TOTALE \u2013 {dt} \u2013"
+    # Heading text exactly as it appears in the Italian template
+    TC_HEADING = "CONDIZIONI GENERALI DI VENDITA"
     PAYMENT_OPTIONS = [
         "Anticipato tramite bonifico bancario",
         "100% bonifico bancario all'ordine",
@@ -279,6 +284,8 @@ else:
         "generate": "📥 Genera Offerta",
         "warn_company": "Inserire la ragione sociale.",
         "warn_items": "Aggiungere almeno un articolo.",
+        # Validation for attn field when toggled but name is empty — Italian
+        "warn_attn": "Inserisci Nome contatto. È obbligatorio se selezioni 'All'attenzione di'.",
         "success": "✅ Offerta {num} pronta! Totale: {cur} {total}",
         "download": "📄 Scarica documento Word",
         "custom": "— personalizzato —", "new_cust": "— nuovo cliente —",
@@ -379,6 +386,38 @@ def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", fon
     run.italic = italic
     run.font.name = font_name
     run.font.size = Pt(font_size)
+
+def bold_tc_heading(doc, heading_text):
+    """
+    Find the Terms & Conditions / Condizioni Generali heading paragraph
+    anywhere in the document and force all its runs to bold.
+    """
+    for para in doc.paragraphs:
+        full = "".join(r.text for r in para.runs)
+        if heading_text in full:
+            for run in para.runs:
+                run.bold = True
+                run.font.name = "Verdana"
+                run.font.size = Pt(10)
+            # If the full text was split across runs, consolidate into one bold run
+            if len(para.runs) > 1:
+                para.runs[0].text = full
+                for run in para.runs[1:]:
+                    run.text = ""
+            break
+    # Also check inside tables (some templates put T&C inside a table)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    full = "".join(r.text for r in para.runs)
+                    if heading_text in full:
+                        for run in para.runs:
+                            run.bold = True
+                        if len(para.runs) > 1:
+                            para.runs[0].text = full
+                            for run in para.runs[1:]:
+                                run.text = ""
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -551,7 +590,6 @@ for i, item in enumerate(st.session_state.line_items):
                 else:
                     item["description"] = ""
                     item["unit_price"] = item["price_client"] = item["price_reseller"] = 0.0
-                    # Don't rerun when switching to custom — let user type immediately
 
             if prod_idx > 0 and prod_idx in PRODUCT_MAP:
                 p_sel = PRODUCT_MAP[prod_idx]
@@ -643,157 +681,170 @@ doc_name = st.text_input(LBL["file_name"], value=default_name)
 # ── GENERATE ──────────────────────────────────
 st.divider()
 if st.button(LBL["generate"], type="primary", use_container_width=True, disabled=not number_ok):
+    # ── Validation ────────────────────────────────────────────────────────────
     if not company:
         st.warning(LBL["warn_company"])
-    elif not any(item["description"].strip() for item in st.session_state.line_items):
+        st.stop()
+
+    # If "attn of" is ticked but full name is blank → friendly, specific error
+    if include_attn and not full_name.strip():
+        st.warning(LBL["warn_attn"])
+        st.stop()
+
+    if not any(item["description"].strip() for item in st.session_state.line_items):
         st.warning(LBL["warn_items"])
-    else:
-        zip_city = f"{zip_code} {city}".strip()
-        if region:
-            zip_city += f", {region}"
+        st.stop()
 
-        header_replacements = {
-            f"Schio, [DD/MM/\u2019YY]": f"Schio, {formatted_date}",
-            f"[DD/MM/\u2019YY]":        formatted_date,
-            "[COMPANY NAME]":           company,
-            "[Address]":                address,
-            "[Zip] [City], [Region]":   zip_city,
-            "[Country]":                country,
-            "Mr./Ms. [Full Name]":      f"{salutation} {full_name}" if include_attn else "",
-            "[Sal.]":                   salutation,
-            "[Full Name]":              full_name,
-            "[NNN/YY]":                 proforma_number,
-        }
+    # ── Build document ────────────────────────────────────────────────────────
+    zip_city = f"{zip_code} {city}".strip()
+    if region:
+        zip_city += f", {region}"
 
-        try:
-            template_path = os.path.join(os.path.dirname(__file__), TEMPLATE_FILE)
-            doc = Document(template_path)
-        except Exception as e:
-            st.error(f"❌ Template not found: {e}")
-            st.stop()
+    header_replacements = {
+        f"Schio, [DD/MM/\u2019YY]": f"Schio, {formatted_date}",
+        f"[DD/MM/\u2019YY]":        formatted_date,
+        "[COMPANY NAME]":           company,
+        "[Address]":                address,
+        "[Zip] [City], [Region]":   zip_city,
+        "[Country]":                country,
+        "Mr./Ms. [Full Name]":      f"{salutation} {full_name}" if include_attn else "",
+        "[Sal.]":                   salutation,
+        "[Full Name]":              full_name,
+        "[NNN/YY]":                 proforma_number,
+    }
 
-        for para in doc.paragraphs:
-            replace_in_paragraph(para, header_replacements)
+    try:
+        template_path = os.path.join(os.path.dirname(__file__), TEMPLATE_FILE)
+        doc = Document(template_path)
+    except Exception as e:
+        st.error(f"❌ Template not found: {e}")
+        st.stop()
 
-        for para in doc.paragraphs:
-            full = "".join(r.text for r in para.runs)
+    for para in doc.paragraphs:
+        replace_in_paragraph(para, header_replacements)
 
-            if para == doc.paragraphs[0]:
+    for para in doc.paragraphs:
+        full = "".join(r.text for r in para.runs)
+
+        if para == doc.paragraphs[0]:
+            para.clear()
+            r1 = para.add_run("Schio, ")
+            r1.bold = False; r1.font.name = "Verdana"; r1.font.size = Pt(10)
+            r2 = para.add_run(formatted_date)
+            r2.bold = False; r2.font.name = "Verdana"; r2.font.size = Pt(10)
+            continue
+
+        if "To the attn. of" in full or "All'attenzione" in full:
+            if include_attn and full_name.strip():
                 para.clear()
-                r1 = para.add_run("Schio, ")
-                r1.bold = False; r1.font.name = "Verdana"; r1.font.size = Pt(10)
-                r2 = para.add_run(formatted_date)
-                r2.bold = False; r2.font.name = "Verdana"; r2.font.size = Pt(10)
-                continue
-
-            if "To the attn. of" in full or "All'attenzione" in full:
-                if include_attn and (salutation or full_name):
-                    para.clear()
-                    r_prefix = para.add_run(f"To the attn. of {salutation} ")
-                    r_prefix.bold = False; r_prefix.font.name = "Verdana"; r_prefix.font.size = Pt(10)
-                    r_name = para.add_run(full_name)
-                    r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
-                else:
-                    p = para._p
-                    p.getparent().remove(p)
-                continue
-
-            if "OFFER NO" in full or "OFFERTA Nr" in full:
-                for run in para.runs:
-                    run.bold = True
-                continue
-
-            if company and company in full:
-                set_para_run(para, company, bold=True)
-                continue
-
-            for run in para.runs:
-                run.bold = False
-                run.font.name = "Verdana"
-                run.font.size = Pt(10)
-
-        table    = doc.tables[0]
-        MAX_ROWS = 15
-        valid_items = [it for it in st.session_state.line_items if it["description"].strip()]
-
-        for row_idx in range(1, MAX_ROWS + 1):
-            row   = table.rows[row_idx]
-            cells = row.cells
-            if row_idx - 1 < len(valid_items):
-                item       = valid_items[row_idx - 1]
-                pos        = row_idx * 10
-                line_total = item["qty"] * item["unit_price"]
-                qty_str    = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                price_str  = fmt_price_it(item["unit_price"])
-                total_str  = fmt_price_it(line_total)
-                set_cell_text(cells[0], str(pos), bold=False)
-                desc_cell  = cells[1]
-                for para in desc_cell.paragraphs:
-                    for run in para.runs:
-                        run.text = ""
-                        rPr = run._r.find(qn('w:rPr'))
-                        if rPr is not None: run._r.remove(rPr)
-                first_para = desc_cell.paragraphs[0]
-                r = first_para.add_run(item["description"])
-                r.bold = True; r.font.name = "Verdana"; r.font.size = Pt(10)
-                details = item.get("details", "").strip()
-                if details:
-                    new_p = copy.deepcopy(first_para._p)
-                    desc_cell._tc.append(new_p)
-                    second_para = desc_cell.paragraphs[-1]
-                    for run in second_para.runs:
-                        run.text = ""
-                    dr = second_para.add_run(details)
-                    dr.bold = False; dr.font.name = "Verdana"; dr.font.size = Pt(10)
-                set_cell_text(cells[2], qty_str)
-                set_cell_text(cells[3], price_str)
-                set_cell_text(cells[4], currency)
-                set_cell_text(cells[5], total_str)
+                r_prefix = para.add_run(f"To the attn. of {salutation} ")
+                r_prefix.bold = False; r_prefix.font.name = "Verdana"; r_prefix.font.size = Pt(10)
+                r_name = para.add_run(full_name)
+                r_name.bold = False; r_name.font.name = "Verdana"; r_name.font.size = Pt(10)
             else:
-                for cell in cells:
-                    set_cell_text(cell, "")
-                trPr = row._tr.find(qn('w:trPr'))
-                if trPr is None:
-                    trPr = OxmlElement('w:trPr')
-                    row._tr.insert(0, trPr)
-                existing_h = trPr.find(qn('w:trHeight'))
-                if existing_h is not None:
-                    trPr.remove(existing_h)
-                trH = OxmlElement('w:trHeight')
-                trH.set(qn('w:val'), '1'); trH.set(qn('w:hRule'), 'exact')
-                trPr.append(trH)
+                p = para._p
+                p.getparent().remove(p)
+            continue
 
-        total_row   = table.rows[MAX_ROWS + 1]
-        tcells      = total_row.cells
-        total_label = TOTAL_LABEL_TPL.format(dt=delivery_terms)
-        set_cell_text(tcells[0], total_label, bold=True)
-        set_cell_text(tcells[4], currency,    bold=True)
-        set_cell_text(tcells[5], fmt_price_it(grand_total), bold=True)
+        if "OFFER NO" in full or "OFFERTA Nr" in full:
+            for run in para.runs:
+                run.bold = True
+            continue
 
-        terms_table = doc.tables[1]
-        terms_map   = {0: hs_code, 1: payment, 4: delivery_terms,
-                       5: delivery_time, 6: packing, 7: shipment}
-        for row_idx, value in terms_map.items():
-            if row_idx < len(terms_table.rows):
-                set_cell_text(terms_table.rows[row_idx].cells[1], value)
+        if company and company in full:
+            set_para_run(para, company, bold=True)
+            continue
 
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
+        for run in para.runs:
+            run.bold = False
+            run.font.name = "Verdana"
+            run.font.size = Pt(10)
 
-        save_offerta(proforma_number, company, grand_total, currency,
-                     date_of_reference=selected_date.strftime("%Y-%m-%d"),
-                     payment_terms=payment)
-        if company.strip():
-            save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
-            load_customers.clear()
-            st.session_state.customers_db = load_customers()
+    # ── Bold the T&C / Condizioni heading ────────────────────────────────────
+    bold_tc_heading(doc, TC_HEADING)
 
-        total_display = fmt_price_it(grand_total)
-        st.success(LBL["success"].format(num=proforma_number, cur=currency, total=total_display))
-        st.download_button(
-            label=LBL["download"], data=buffer,
-            file_name=f"{doc_name}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
+    table    = doc.tables[0]
+    MAX_ROWS = 15
+    valid_items = [it for it in st.session_state.line_items if it["description"].strip()]
+
+    for row_idx in range(1, MAX_ROWS + 1):
+        row   = table.rows[row_idx]
+        cells = row.cells
+        if row_idx - 1 < len(valid_items):
+            item       = valid_items[row_idx - 1]
+            pos        = row_idx * 10
+            line_total = item["qty"] * item["unit_price"]
+            qty_str    = f"{item['qty']:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            price_str  = fmt_price_it(item["unit_price"])
+            total_str  = fmt_price_it(line_total)
+            set_cell_text(cells[0], str(pos), bold=False)
+            desc_cell  = cells[1]
+            for para in desc_cell.paragraphs:
+                for run in para.runs:
+                    run.text = ""
+                    rPr = run._r.find(qn('w:rPr'))
+                    if rPr is not None: run._r.remove(rPr)
+            first_para = desc_cell.paragraphs[0]
+            r = first_para.add_run(item["description"])
+            r.bold = True; r.font.name = "Verdana"; r.font.size = Pt(10)
+            details = item.get("details", "").strip()
+            if details:
+                new_p = copy.deepcopy(first_para._p)
+                desc_cell._tc.append(new_p)
+                second_para = desc_cell.paragraphs[-1]
+                for run in second_para.runs:
+                    run.text = ""
+                dr = second_para.add_run(details)
+                dr.bold = False; dr.font.name = "Verdana"; dr.font.size = Pt(10)
+            set_cell_text(cells[2], qty_str)
+            set_cell_text(cells[3], price_str)
+            set_cell_text(cells[4], currency)
+            set_cell_text(cells[5], total_str)
+        else:
+            for cell in cells:
+                set_cell_text(cell, "")
+            trPr = row._tr.find(qn('w:trPr'))
+            if trPr is None:
+                trPr = OxmlElement('w:trPr')
+                row._tr.insert(0, trPr)
+            existing_h = trPr.find(qn('w:trHeight'))
+            if existing_h is not None:
+                trPr.remove(existing_h)
+            trH = OxmlElement('w:trHeight')
+            trH.set(qn('w:val'), '1'); trH.set(qn('w:hRule'), 'exact')
+            trPr.append(trH)
+
+    total_row   = table.rows[MAX_ROWS + 1]
+    tcells      = total_row.cells
+    total_label = TOTAL_LABEL_TPL.format(dt=delivery_terms)
+    set_cell_text(tcells[0], total_label, bold=True)
+    set_cell_text(tcells[4], currency,    bold=True)
+    set_cell_text(tcells[5], fmt_price_it(grand_total), bold=True)
+
+    terms_table = doc.tables[1]
+    terms_map   = {0: hs_code, 1: payment, 4: delivery_terms,
+                   5: delivery_time, 6: packing, 7: shipment}
+    for row_idx, value in terms_map.items():
+        if row_idx < len(terms_table.rows):
+            set_cell_text(terms_table.rows[row_idx].cells[1], value)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    save_offerta(proforma_number, company, grand_total, currency,
+                 date_of_reference=selected_date.strftime("%Y-%m-%d"),
+                 payment_terms=payment)
+    if company.strip():
+        save_customer(company, full_name, salutation, "", "", address, city, zip_code, country, "")
+        load_customers.clear()
+        st.session_state.customers_db = load_customers()
+
+    total_display = fmt_price_it(grand_total)
+    st.success(LBL["success"].format(num=proforma_number, cur=currency, total=total_display))
+    st.download_button(
+        label=LBL["download"], data=buffer,
+        file_name=f"{doc_name}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
+    )
