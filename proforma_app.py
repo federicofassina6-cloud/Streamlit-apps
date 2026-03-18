@@ -214,7 +214,7 @@ if "pt_db" not in st.session_state:
 
 PRODS = st.session_state.products_db
 
-PNAMES = ["— select product —"]
+PNAMES = ["— custom item —"]
 PMAP   = {}
 for p in PRODS:
     dk    = "description" if LANG == "it" else "description_eng"
@@ -400,13 +400,20 @@ for i, item in enumerate(st.session_state.line_items):
                 pp = PMAP[pidx]
                 if pp.get("description"): st.caption(f"🇮🇹 {pp['description']}")
                 if pp.get("description_eng"): st.caption(f"🇬🇧 {pp['description_eng']}")
+            if pidx == 0:
+                item["description"] = st.text_input(
+                    "Custom Product Name", value=item.get("description",""), key=f"desc_{i}")
+                item["unit_price"] = st.number_input(
+                    f"Unit Price ({currency})", min_value=0.0, value=float(item.get("unit_price",0.0)),
+                    step=0.01, format="%.2f", key=f"up_{i}")
             item["details"] = st.text_input(L["details"], value=item.get("details",""), key=f"d_{i}")
         with lc2:
             item["qty"] = st.number_input(L["qty"], min_value=0.0, value=float(item["qty"]),
                 step=1.0, format="%.1f", key=f"q_{i}")
         with lc3:
-            st.write(f"**{L['uprice'].format(c=currency)}**")
-            st.write(fmt_it(item["unit_price"]))
+            if pidx > 0:
+                st.write(f"**{L['uprice'].format(c=currency)}**")
+                st.write(fmt_it(item["unit_price"]))
         with lc4:
             st.write(""); st.write("")
             if st.button(L["rm"], key=f"r_{i}"): to_rm.append(i)
