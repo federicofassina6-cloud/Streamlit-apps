@@ -73,6 +73,18 @@ def load_delivery_terms():
         return [x["term"] for x in d] if isinstance(d, list) else []
     except: return []
 
+def load_payment_terms():
+    try:
+        d = requests.get(f"{SUPABASE_URL}/rest/v1/payment_terms", headers=HDR,
+            params={"select":"term","order":"created_at.asc"}).json()
+        return [x["term"] for x in d] if isinstance(d, list) else []
+    except: return []
+
+def save_payment_term(term):
+    existing = load_payment_terms()
+    if term in existing: return
+    requests.post(f"{SUPABASE_URL}/rest/v1/payment_terms", headers=HDR, json={"term": term})
+
 @st.cache_data(ttl=60)
 def load_existing_numbers():
     try:
@@ -87,7 +99,7 @@ def get_next_number():
     this_yr = [n for n in existing if str(n).startswith("PI") and str(n).endswith(f"/{yr}")]
     return f"PI{len(this_yr)+1:03d}/{yr}"
 
-def save_proforma(num, company, total, currency, date_of_reference=None, note=None):
+def save_proforma(num, company, total, currency, date_of_reference=None, note=None, payment_terms=None):
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/fatture_proforma",
         headers={**HDR, "Prefer": "return=representation"},
@@ -99,6 +111,7 @@ def save_proforma(num, company, total, currency, date_of_reference=None, note=No
             "status": "not_sent",
             "date_of_reference": date_of_reference,
             "note": note,
+            "payment_terms": payment_terms,
         }
     )
     if not r.ok:
@@ -196,6 +209,8 @@ if "customers_db" not in st.session_state:
     st.session_state.customers_db = load_customers()
 if "dt_db" not in st.session_state:
     st.session_state.dt_db = load_delivery_terms()
+if "pt_db" not in st.session_state:
+    st.session_state.pt_db = load_payment_terms()
 
 PRODS = st.session_state.products_db
 
@@ -413,8 +428,16 @@ tc1, tc2 = st.columns(2)
 with tc1:
     hs = st.selectbox(L["hs"], HS+[L["cust"]])
     if hs == L["cust"]: hs = st.text_input("Custom HS")
-    pay = st.selectbox(L["pay"], PAY_OPTS+[L["cust"]])
-    if pay == L["cust"]: pay = st.text_input("Custom payment")
+    PT_OPTS = st.session_state.pt_db
+    pay = st.selectbox(L["pay"], PT_OPTS+[L["cust"]])
+    if pay == L["cust"]:
+        pay = st.text_input("Custom payment", key="custom_pay")
+        if pay and pay not in PT_OPTS:
+            if st.button("💾 Save this payment term", key="save_pt"):
+                save_payment_term(pay)
+                st.session_state.pt_db = load_payment_terms()
+                st.success(f"✅ '{pay}' saved!")
+                st.rerun()
     dt = st.selectbox(L["dt"], DT_OPTS+[L["cust"]])
     if dt == L["cust"]:
         dt = st.text_input("Custom delivery term")
@@ -560,7 +583,8 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
 
         save_proforma(pnum, company, grand_total, currency,
                       date_of_reference=sel_date.strftime("%Y-%m-%d"),
-                      note=note.strip() if note else None)
+                      note=note.strip() if note else None,
+                      payment_terms=pay)
 
         if company.strip():
             save_customer(company, full_name, sal, address, city, zip_code, country)
