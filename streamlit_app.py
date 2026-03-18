@@ -315,7 +315,7 @@ for p in PRODUCTS:
         seen_cats.append(cat)
         CATEGORIES.append(cat)
 
-PRODUCT_NAMES = ["— select product —"]
+PRODUCT_NAMES = ["— custom item —"]
 PRODUCT_MAP   = {}
 for cat in CATEGORIES:
     cat_products = [p for p in PRODUCTS if (p.get("category") or "Other") == cat]
@@ -559,6 +559,13 @@ for i, item in enumerate(st.session_state.line_items):
                 if ita: st.caption(f"🇮🇹 {ita}")
                 if eng: st.caption(f"🇬🇧 {eng}")
 
+            if prod_idx == 0:
+                item["description"] = st.text_input(
+                    "Custom Product Name", value=item.get("description", ""), key=f"custom_desc_{i}")
+                item["unit_price"] = st.number_input(
+                    f"Unit Price ({currency})", min_value=0.0, value=float(item.get("unit_price", 0.0)),
+                    step=0.01, format="%.2f", key=f"custom_up_{i}")
+
             item["details"] = st.text_input(
                 LBL["details"], value=item.get("details", ""), key=f"details_{i}")
 
@@ -567,8 +574,9 @@ for i, item in enumerate(st.session_state.line_items):
                 LBL["qty"], min_value=0.0, value=float(item["qty"]),
                 step=1.0, format="%.1f", key=f"qty_{i}")
         with c3:
-            st.write(f"**{LBL['unit_price'].format(cur=currency)}**")
-            st.write(fmt_price_it(item["unit_price"]))
+            if prod_idx > 0:
+                st.write(f"**{LBL['unit_price'].format(cur=currency)}**")
+                st.write(fmt_price_it(item["unit_price"]))
         with c4:
             st.write("")
             st.write("")
