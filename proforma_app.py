@@ -576,6 +576,10 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
         st.warning(L["wcomp"])
         st.stop()
 
+    if include_attn and not full_name.strip():
+        st.warning(L["wattn"])
+        st.stop()
+
     if not any(it["description"].strip() for it in st.session_state.line_items):
         st.warning(L["witems"])
         st.stop()
