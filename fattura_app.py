@@ -588,7 +588,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
             if prod_idx != item.get("product_idx"):
                 item["product_idx"] = prod_idx
                 if 0 < prod_idx < EXTRA_ITEM_OFFSET and prod_idx in PRODUCT_MAP:
-                    # Catalogue product
                     p = PRODUCT_MAP[prod_idx]
                     item["description"]    = p.get("description_eng") or p["description"]
                     item["description_it"] = p.get("description","")
@@ -597,7 +596,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     item["unit_price"] = item["price_client"] if global_price_type == "Cliente" else item["price_reseller"]
                     item["is_extra"] = False
                 elif prod_idx >= EXTRA_ITEM_OFFSET:
-                    # Extra built-in item
                     extra = EXTRA_ITEMS[prod_idx - EXTRA_ITEM_OFFSET]
                     item["description"]    = extra[0]
                     item["description_it"] = extra[1]
@@ -608,6 +606,8 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     item["description"]=""; item["description_it"]=""
                     item["unit_price"]=item["price_client"]=item["price_reseller"]=0.0
                     item["is_extra"]=False
+                # Delete the number_input widget key so it reinitialises with the new price
+                st.session_state.pop(f"fattura_up_{i}", None)
                 needs_rerun = True
 
             # Show caption for catalogue items
