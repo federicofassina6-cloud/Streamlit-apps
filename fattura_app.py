@@ -186,7 +186,6 @@ def save_vat_exemption(text):
     except: pass
     requests.post(f"{SUPABASE_URL}/rest/v1/vat_exemptions", headers=HEADERS, json={"code": text})
 
-# NEW: load fatture with status "Fattura di anticipo"
 def load_fatture_anticipo():
     try:
         data = requests.get(f"{SUPABASE_URL}/rest/v1/fatture", headers=HEADERS,
@@ -296,14 +295,14 @@ HS_CODES   = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.
 # ─────────────────────────────────────────────
 if "fattura_line_items" not in st.session_state:
     st.session_state.fattura_line_items = [
-        {"product_idx":0,"description":"","description_it":"","details":"",
+        {"product_idx":0,"description":"","description_it":"","details":"","details_it":"",
          "qty":1.0,"unit_price":0.0,"price_type":"Cliente",
          "is_discount":False,"discount_value":0.0,"linked_anticipo":None}
     ]
 
 def add_line():
     st.session_state.fattura_line_items.append(
-        {"product_idx":0,"description":"","description_it":"","details":"",
+        {"product_idx":0,"description":"","description_it":"","details":"","details_it":"",
          "qty":1.0,"unit_price":0.0,"price_type":"Cliente",
          "is_discount":False,"discount_value":0.0,"linked_anticipo":None}
     )
@@ -312,7 +311,7 @@ def add_discount_line():
     st.session_state.fattura_line_items.append(
         {"product_idx":-1,"description":"DEDUCTION DOWN PAYMENT BY T/T",
          "description_it":"Deduzione per anticipo a mezzo bonifico bancario",
-         "details":"","qty":1.0,"unit_price":0.0,"price_type":"Cliente",
+         "details":"","details_it":"","qty":1.0,"unit_price":0.0,"price_type":"Cliente",
          "is_discount":True,"discount_value":0.0,"linked_anticipo":None}
     )
 
@@ -320,6 +319,18 @@ def add_discount_line():
 # UI
 # ─────────────────────────────────────────────
 st.title("🧾 Fattura Generator")
+
+# ── LANGUAGE SELECTOR ──
+st.subheader("📄 Document Language / Lingua del documento")
+lang = st.radio(
+    "Select language / Seleziona lingua",
+    options=["🇦🇺 English", "🇮🇹 Italiano"],
+    horizontal=True,
+    key="doc_language"
+)
+is_italian = lang == "🇮🇹 Italiano"
+
+st.divider()
 
 # ── 1. DATE, TYPE & NUMBER ──
 st.subheader("1. Date, Type & Invoice Number")
@@ -620,23 +631,22 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                 extra = EXTRA_ITEMS[prod_idx - EXTRA_ITEM_OFFSET]
                 st.caption(f"🇬🇧 {extra[0]} / 🇮🇹 {extra[1]}")
 
-            # Custom item fields — fattura app is English-only for the document
-            # but stores both EN and IT descriptions for bilingual templates
             if prod_idx == 0:
                 item["description"] = st.text_input(
-                    "Custom Product Name (EN — shown in document)",
+                    "Custom Product Name (EN — shown in English document)",
                     value=item.get("description", ""),
                     key=f"fattura_desc_{i}")
                 item["description_it"] = st.text_input(
-                    "Custom Product Name (IT — for reference)",
+                    "Custom Product Name (IT — shown in Italian document)",
                     value=item.get("description_it", ""),
                     key=f"fattura_desc_it_{i}")
 
             item["details"] = st.text_input(
-                "Description / Specs (optional)", value=item.get("details",""), key=f"fattura_details_{i}")
+                "Description / Specs EN (optional)", value=item.get("details",""), key=f"fattura_details_{i}")
+            item["details_it"] = st.text_input(
+                "Description / Specs IT (optional)", value=item.get("details_it",""), key=f"fattura_details_it_{i}")
 
             # Unit price — always editable; pre-filled from DB list price for catalogue items.
-            # Key includes prod_idx so Streamlit creates a fresh widget when product changes.
             is_catalogue = 0 < prod_idx < EXTRA_ITEM_OFFSET and prod_idx in PRODUCT_MAP
             db_price = 0.0
             if is_catalogue:
@@ -713,8 +723,6 @@ st.subheader("7. Invoice Status")
 # Check if any discount/deduction lines are present
 has_discount = any(it.get("is_discount") for it in st.session_state.fattura_line_items)
 
-# Three statuses: not_sent (default), sent, Fattura di anticipo (blue)
-# If a discount line is present, Fattura di anticipo is blocked
 status_options = {
     "not_sent": "⬜ Not Sent",
     "sent":     "✅ Sent",
@@ -722,7 +730,6 @@ status_options = {
 }
 
 if has_discount:
-    # Only allow not_sent and sent — this invoice has a deduction so it cannot be an advance invoice
     available_statuses = ["not_sent", "sent"]
     st.caption("ℹ️ *Fattura di anticipo* status is not available when a deduction line is present.")
 else:
@@ -760,11 +767,13 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     zip_city = f"{zip_code} {city}".strip()
     if region: zip_city += f", {region}"
 
+    # ── Choose template based on language ──
+    template_filename = "fattura_template_ita.docx" if is_italian else "fattura_template.docx"
     try:
-        template_path = os.path.join(os.path.dirname(__file__), "fattura_template.docx")
+        template_path = os.path.join(os.path.dirname(__file__), template_filename)
         doc = Document(template_path)
     except Exception as e:
-        st.error(f"❌ Template not found: {e}"); st.stop()
+        st.error(f"❌ Template not found ({template_filename}): {e}"); st.stop()
 
     # ── Header paragraphs ──
     header_replacements = {
@@ -806,9 +815,12 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     }
     # When status is Fattura di anticipo, relabel the invoice header in the document
     if status_choice == "Fattura di anticipo":
-        table0_replacements["INVOICE No.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
-        table0_replacements["FATTURA N.:"]   = "FATTURA N. (anticipo):"
-        table0_replacements["INVOICE NO.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
+        if is_italian:
+            table0_replacements["FATTURA No.:"]  = "FATTURA DI ANTICIPO Nr.:"
+            table0_replacements["FATTURA N.:"]   = "FATTURA DI ANTICIPO Nr.:"
+        else:
+            table0_replacements["INVOICE No.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
+            table0_replacements["INVOICE NO.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
     for row in t0.rows:
         for cell in row.cells:
             replace_in_table_cell(cell, table0_replacements)
@@ -821,11 +833,18 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
 
     # ── Table 1: Payment, bank, delivery ──
     t1 = doc.tables[1]
-    set_cell_text(t1.rows[0].cells[0], f"PAYMENT TERMS:\n{payment}",
+    if is_italian:
+        payment_label = f"PAGAMENTO:\n{payment}"
+        delivery_section_label = "INDIRIZZO DI CONSEGNA DELLA MERCE:"
+    else:
+        payment_label = f"PAYMENT TERMS:\n{payment}"
+        delivery_section_label = "DELIVERY PLACE OF THE GOODS:"
+
+    set_cell_text(t1.rows[0].cells[0], payment_label,
                   bold=False, font_name="Verdana", font_size=10)
     del_city_region = f"{del_zip} {del_city}".strip()
     if del_region: del_city_region += f", {del_region}"
-    del_lines = ["DELIVERY PLACE OF THE GOODS:"]
+    del_lines = [delivery_section_label]
     if del_company: del_lines.append(del_company)
     if del_address: del_lines.append(del_address)
     if del_city_region: del_lines.append(del_city_region)
@@ -847,29 +866,34 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
             item = valid_items[row_idx-1]
             is_disc = item.get("is_discount", False)
 
+            # Pick description and details based on language
+            if is_italian:
+                desc_text    = item.get("description_it","") or item.get("description","")
+                details_text = item.get("details_it","").strip() or item.get("details","").strip()
+            else:
+                desc_text    = item.get("description","")
+                details_text = item.get("details","").strip()
+
             if is_disc:
-                disc_val   = item.get("discount_value", 0.0)
-                qty_str    = ""
-                price_str  = fmt_price(disc_val)
+                disc_val  = item.get("discount_value", 0.0)
                 set_cell_text(cells[0], "", bold=False)
                 desc_cell = cells[1]
                 for para in desc_cell.paragraphs:
                     for run in para.runs: run.text=""
                 fp = desc_cell.paragraphs[0]
-                r_en = fp.add_run(item["description"])
+                r_en = fp.add_run(desc_text)
                 r_en.bold=False; r_en.font.name="Verdana"; r_en.font.size=Pt(10)
-                det_en = item.get("details","").strip()
-                if det_en:
+                if details_text:
                     np2 = copy.deepcopy(fp._p)
                     desc_cell._tc.append(np2)
                     det_para = desc_cell.paragraphs[-1]
                     for run in det_para.runs: run.text=""
-                    r_det = det_para.add_run(det_en)
+                    r_det = det_para.add_run(details_text)
                     r_det.bold=False; r_det.font.name="Verdana"; r_det.font.size=Pt(10)
                 set_cell_text(cells[2], "", bold=False)
                 set_cell_text(cells[3], "", bold=False)
                 set_cell_text(cells[4], currency, bold=False)
-                set_cell_text(cells[5], price_str, bold=False)
+                set_cell_text(cells[5], fmt_price(disc_val), bold=False)
             else:
                 line_total = item["qty"] * item["unit_price"]
                 qty_str    = fmt_qty(item["qty"])
@@ -880,15 +904,14 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 for para in desc_cell.paragraphs:
                     for run in para.runs: run.text=""
                 first_para = desc_cell.paragraphs[0]
-                r_en = first_para.add_run(item["description"])
+                r_en = first_para.add_run(desc_text)
                 r_en.bold=False; r_en.font.name="Verdana"; r_en.font.size=Pt(10)
-                details = item.get("details","").strip()
-                if details:
+                if details_text:
                     new_p2 = copy.deepcopy(first_para._p)
                     desc_cell._tc.append(new_p2)
                     det_para = desc_cell.paragraphs[-1]
                     for run in det_para.runs: run.text=""
-                    r_det = det_para.add_run(details)
+                    r_det = det_para.add_run(details_text)
                     r_det.bold=False; r_det.font.name="Verdana"; r_det.font.size=Pt(10)
                 set_cell_text(cells[2], currency, bold=False)
                 set_cell_text(cells[3], price_str, bold=False)
@@ -943,7 +966,8 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         it["currency"] = currency
     save_fattura_items(fattura_id, st.session_state.fattura_line_items)
 
-    st.success(f"✅ Fattura {invoice_number} ready! Total: {currency} {fmt_price(grand_total)}")
+    lang_label = "🇮🇹 Italian" if is_italian else "🇦🇺 English"
+    st.success(f"✅ Fattura {invoice_number} ready! ({lang_label}) Total: {currency} {fmt_price(grand_total)}")
     st.download_button(
         label="📄 Download Word Document", data=buffer,
         file_name=f"{doc_name}.docx",
