@@ -639,6 +639,10 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
             set_run(para, company, bold=True)
             continue
 
+        # Skip T&C heading — leave it exactly as the template has it (bold)
+        if TC_HEADING.upper() in full.upper():
+            continue
+
         for r in para.runs:
             r.bold=False; r.font.name="Verdana"; r.font.size=Pt(10)
 
@@ -699,68 +703,6 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
     buf = io.BytesIO()
     doc.save(buf); buf.seek(0)
 
-    # ── Bold T&C heading via direct XML string replacement ───────────────────
-    import zipfile, re as _re
-
-    def _inject_bold_in_xml(xml_bytes: bytes, heading: str) -> bytes:
-        """
-        Inject bold into any paragraph containing heading (case-insensitive).
-        Works by splitting on paragraph boundaries and checking joined w:t text.
-        """
-        try:
-            xml = xml_bytes.decode("utf-8")
-        except Exception:
-            return xml_bytes
-
-        heading_upper = heading.upper()
-
-        # Split XML on paragraph open tags — safer than greedy/lazy regex on large docs
-        # We reconstruct by splitting on </w:p> boundaries
-        parts = xml.split('</w:p>')
-        result = []
-        for part in parts:
-            # Extract all w:t content in this chunk
-            texts = _re.findall(r'<w:t[^>]*>([^<]*)</w:t>', part)
-            joined = "".join(texts).upper()
-            if heading_upper in joined:
-                # Found the heading paragraph — bold all runs in it
-                def _add_bold_to_rPr(rm):
-                    rPr = rm.group(0)
-                    # Strip existing bold attrs to avoid duplicates
-                    rPr = _re.sub(r'<w:b(?:Cs)?\s*(?:w:val="[^"]*")?\s*/>', '', rPr)
-                    rPr = rPr.replace('</w:rPr>', '<w:b w:val="1"/><w:bCs w:val="1"/></w:rPr>')
-                    return rPr
-
-                part = _re.sub(r'<w:rPr>.*?</w:rPr>', _add_bold_to_rPr, part, flags=_re.DOTALL)
-
-                # Runs with no <w:rPr> at all — inject one before <w:t
-                def _add_rPr_if_missing(rm):
-                    run = rm.group(0)
-                    if '<w:rPr>' not in run:
-                        run = run.replace('<w:t', '<w:rPr><w:b w:val="1"/><w:bCs w:val="1"/></w:rPr><w:t', 1)
-                    return run
-
-                part = _re.sub(r'<w:r\b[^>]*>.*?</w:r>', _add_rPr_if_missing, part, flags=_re.DOTALL)
-
-            result.append(part)
-
-        return '</w:p>'.join(result).encode("utf-8")
-
-    # Read the docx (zip), patch document.xml, write back
-    buf2 = io.BytesIO()
-    with zipfile.ZipFile(buf, 'r') as zin, zipfile.ZipFile(buf2, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for item_z in zin.infolist():
-            fname = item_z.filename
-            data = zin.read(fname)
-            if fname in ("word/document.xml", "word/header1.xml",
-                         "word/header2.xml", "word/footer1.xml",
-                         "word/footer2.xml"):
-                data = _inject_bold_in_xml(data, TC_HEADING)
-            zout.writestr(item_z, data)
-    buf2.seek(0)
-
-    # FIX: use sel_date.isoformat() — date_input returns a date object,
-    # strftime("%Y-%m-%d") is safe and avoids any timezone shift.
     save_proforma(pnum, company, grand_total, currency,
                   date_of_reference=sel_date.isoformat(),
                   note=note.strip() if note else None,
@@ -772,6 +714,6 @@ if st.button(L["gen"], type="primary", use_container_width=True, disabled=not nu
         st.session_state.customers_db = load_customers()
 
     st.success(L["ok"].format(n=pnum, c=currency, t=fmt_it(grand_total)))
-    st.download_button(label=L["dl"], data=buf2, file_name=f"{doc_name}.docx",
+    st.download_button(label=L["dl"], data=buf, file_name=f"{doc_name}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         use_container_width=True)
