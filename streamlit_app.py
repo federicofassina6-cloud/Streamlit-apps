@@ -786,8 +786,8 @@ if st.button(LBL["generate"], type="primary", use_container_width=True, disabled
             set_para_run(para, company, bold=True)
             continue
 
-        # Skip T&C heading — leave it exactly as the template has it (bold)
-        if TC_HEADING.upper() in full.upper():
+        # Skip T&C heading — preserve template bold exactly as-is
+        if TC_HEADING.upper() in para.text.upper():
             continue
 
         for run in para.runs:
