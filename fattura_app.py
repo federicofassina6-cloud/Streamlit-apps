@@ -815,7 +815,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     if status_choice == "Fattura di anticipo":
         if is_italian:
             table0_replacements["FATTURA No.:"]  = "FATTURA DI ANTICIPO Nr.:"
-            table0_replacements["FATTURA N.:"]   = "FATTURA DI ANTICIPO Nr.:"
+            table0_replacements["FATTURA Nr.:"]   = "FATTURA DI ANTICIPO Nr.:"
         else:
             table0_replacements["INVOICE No.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
             table0_replacements["INVOICE NO.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
