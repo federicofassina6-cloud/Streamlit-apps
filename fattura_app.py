@@ -18,9 +18,7 @@ def fmt_price(n):
     formatted = f"{abs_n:,.2f}"
     formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
     if formatted.endswith(",00"):
-        # Whole number — add the dash
         formatted = formatted[:-3] + ",–"
-    # else: has real decimal digits — no dash
     return f"{sign}{formatted}"
 
 def fmt_qty(n):
@@ -309,7 +307,8 @@ def add_line():
 
 def add_discount_line():
     st.session_state.fattura_line_items.append(
-        {"product_idx":-1,"description":"DEDUCTION DOWN PAYMENT BY T/T",
+        {"product_idx":-1,
+         "description":"DEDUCTION DOWN PAYMENT BY T/T",
          "description_it":"DEDUZIONE PER ANTICIPO A MEZZO BONIFICO BANCARIO",
          "details":"","details_it":"","qty":1.0,"unit_price":0.0,"price_type":"Cliente",
          "is_discount":True,"discount_value":0.0,"linked_anticipo":None}
@@ -495,9 +494,7 @@ with col_pt:
 st.subheader("6. Line Items")
 st.caption("Select from catalogue or choose '— custom item —' to type manually.")
 
-# Extra catalogue items (not in products DB, built-in)
 EXTRA_ITEMS = [
-    # (label_en, label_it, description_en, description_it)
     ("Packing charges",
      "Spese di imballaggio",
      "Packing charges",
@@ -512,7 +509,7 @@ EXTRA_ITEMS = [
      "Spese di spedizione"),
 ]
 EXTRA_ITEM_LABELS = [f"🇬🇧 {e[0]} / 🇮🇹 {e[1]}" for e in EXTRA_ITEMS]
-EXTRA_ITEM_OFFSET = len(PRODUCT_NAMES)  # indices >= this are extra items
+EXTRA_ITEM_OFFSET = len(PRODUCT_NAMES)
 
 ALL_ITEM_NAMES = PRODUCT_NAMES + EXTRA_ITEM_LABELS
 
@@ -546,15 +543,12 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     fat = fatture_anticipo[sel_anticipo_idx - 1]
                     inv_num  = fat.get("invoice_number","")
                     inv_date = fat.get("date_of_reference","") or ""
-                    # Format date dd/mm/yyyy if ISO
                     if inv_date and "-" in inv_date:
                         parts = inv_date.split("-")
                         if len(parts) == 3:
                             inv_date = f"{parts[2]}/{parts[1]}/{parts[0]}"
-                    # EN description
                     item["description"]    = "DEDUCTION DOWN PAYMENT BY T/T"
                     item["details"]        = f"Our invoice no. {inv_num} dtd {inv_date}"
-                    # IT description
                     item["description_it"] = "DEDUZIONE PER ANTICIPO A MEZZO BONIFICO BANCARIO"
                     item["details_it"]     = f"Nostra fattura no. {inv_num} del {inv_date}"
                     item["linked_anticipo"] = inv_num
@@ -563,7 +557,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                 else:
                     item["linked_anticipo"] = None
 
-                # Discount value — must be ≤ 0
                 discount_val = st.number_input(
                     f"Discount Value ({currency}) — must be 0 or negative",
                     max_value=0.0,
@@ -573,7 +566,7 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     key=f"disc_val_{i}"
                 )
                 item["discount_value"] = discount_val
-                item["unit_price"]     = discount_val   # used in grand total
+                item["unit_price"]     = discount_val
                 item["qty"]            = 1.0
                 if discount_val != 0.0:
                     st.caption(f"Discount total: {currency} {fmt_price(discount_val)}")
@@ -617,21 +610,25 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     item["description"]=""; item["description_it"]=""
                     item["unit_price"]=item["price_client"]=item["price_reseller"]=0.0
                     item["is_extra"]=False
-                # Delete the number_input widget key so it reinitialises with the new price
                 st.session_state.pop(f"fattura_up_{i}", None)
                 needs_rerun = True
 
-            # Show caption for catalogue items
+            # Caption for catalogue items — language-aware
             if 0 < prod_idx < EXTRA_ITEM_OFFSET and prod_idx in PRODUCT_MAP:
-                it_name = PRODUCT_MAP[prod_idx].get("description","")
-                if it_name: st.caption(f"🇮🇹 {it_name}")
+                if is_italian:
+                    it_name = PRODUCT_MAP[prod_idx].get("description","")
+                    if it_name: st.caption(f"🇮🇹 {it_name}")
+                else:
+                    en_name = PRODUCT_MAP[prod_idx].get("description_eng","") or PRODUCT_MAP[prod_idx].get("description","")
+                    if en_name: st.caption(f"🇬🇧 {en_name}")
 
-            # Show extra item caption
+            # Caption for extra items — language-aware
             if prod_idx >= EXTRA_ITEM_OFFSET:
                 extra = EXTRA_ITEMS[prod_idx - EXTRA_ITEM_OFFSET]
-                st.caption(f"🇬🇧 {extra[0]} / 🇮🇹 {extra[1]}")
+                st.caption(f"🇮🇹 {extra[1]}" if is_italian else f"🇬🇧 {extra[0]}")
 
-           if prod_idx == 0:
+            # Custom item name — show only the relevant language field
+            if prod_idx == 0:
                 if is_italian:
                     item["description_it"] = st.text_input(
                         "Custom Product Name (IT)",
@@ -643,14 +640,18 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                         value=item.get("description", ""),
                         key=f"fattura_desc_{i}")
 
+            # Specs / details — show only the relevant language field
             if is_italian:
                 item["details_it"] = st.text_input(
-                    "Descrizione / Specifiche IT (optional)", value=item.get("details_it",""), key=f"fattura_details_it_{i}")
+                    "Descrizione / Specifiche IT (optional)",
+                    value=item.get("details_it",""),
+                    key=f"fattura_details_it_{i}")
             else:
                 item["details"] = st.text_input(
-                    "Description / Specs EN (optional)", value=item.get("details",""), key=f"fattura_details_{i}")
+                    "Description / Specs EN (optional)",
+                    value=item.get("details",""),
+                    key=f"fattura_details_{i}")
 
-            # Unit price — always editable; pre-filled from DB list price for catalogue items.
             is_catalogue = 0 < prod_idx < EXTRA_ITEM_OFFSET and prod_idx in PRODUCT_MAP
             db_price = 0.0
             if is_catalogue:
@@ -664,7 +665,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                 key=f"fattura_up_{i}_{prod_idx}"
             )
 
-            # Discount / surcharge indicator — only for catalogue items with known DB price
             if is_catalogue and db_price > 0:
                 entered = float(item.get("unit_price", 0.0))
                 if abs(entered - db_price) > 0.001:
@@ -702,21 +702,18 @@ for i in sorted(items_to_remove, reverse=True):
 if items_to_remove or needs_rerun:
     st.rerun()
 
-# Add line buttons
 col_btn1, col_btn2 = st.columns(2)
 with col_btn1:
     st.button("➕ Add Line Item", on_click=add_line)
 with col_btn2:
     if st.button("➕ Add Discount / Sconto"):
-        # Reload anticipo fatture fresh
         st.session_state.fatture_anticipo_db = load_fatture_anticipo()
         add_discount_line()
         st.rerun()
 
-# Grand total includes discounts (discount_value is negative)
-items_total   = sum(it["qty"] * it["unit_price"] for it in st.session_state.fattura_line_items if not it.get("is_discount"))
+items_total    = sum(it["qty"] * it["unit_price"] for it in st.session_state.fattura_line_items if not it.get("is_discount"))
 discount_total = sum(it.get("discount_value", 0.0) for it in st.session_state.fattura_line_items if it.get("is_discount"))
-grand_total   = items_total + discount_total
+grand_total    = items_total + discount_total
 st.markdown(f"### 💰 Total: {currency} {fmt_price(grand_total)}")
 if discount_total < 0:
     st.caption(f"Subtotal: {currency} {fmt_price(items_total)} | Discount: {currency} {fmt_price(discount_total)}")
@@ -724,7 +721,6 @@ if discount_total < 0:
 # ── 7. STATUS ──
 st.subheader("7. Invoice Status")
 
-# Check if any discount/deduction lines are present
 has_discount = any(it.get("is_discount") for it in st.session_state.fattura_line_items)
 
 status_options = {
@@ -758,20 +754,19 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     if not company:
         st.warning("Please enter a company name.")
         st.stop()
-    if not any(it["description"].strip() for it in st.session_state.fattura_line_items):
+    if not any(it.get("description","").strip() or it.get("description_it","").strip() for it in st.session_state.fattura_line_items):
         st.warning("Please add at least one line item.")
         st.stop()
 
-    # Validate discount lines — must have a linked anticipo selected
     for i, it in enumerate(st.session_state.fattura_line_items):
         if it.get("is_discount") and not it.get("linked_anticipo"):
-            st.warning(f"⚠️ Deduction line #{i+1}: please select the advance payment invoice this deduction refers to before generating.")
+            st.warning(f"⚠️ Deduction line #{i+1}: please select the advance payment invoice before generating.")
             st.stop()
 
     zip_city = f"{zip_code} {city}".strip()
     if region: zip_city += f", {region}"
 
-    # ── Choose template based on language ──
+    # Choose template based on language
     template_filename = "fattura_template_ita.docx" if is_italian else "fattura_template.docx"
     try:
         template_path = os.path.join(os.path.dirname(__file__), template_filename)
@@ -817,7 +812,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         "[Partita Iva/VAT Number]": vat_number or "—",
         "[Delivery terms]":         delivery_terms,
     }
-    # When status is Fattura di anticipo, relabel the invoice header in the document
     if status_choice == "Fattura di anticipo":
         if is_italian:
             table0_replacements["FATTURA No.:"]  = "FATTURA DI ANTICIPO Nr.:"
@@ -860,7 +854,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     t2 = doc.tables[2]
     MAX_ROWS = 15
     valid_items = [it for it in st.session_state.fattura_line_items
-                   if it["description"].strip()]
+                   if it.get("description","").strip() or it.get("description_it","").strip()]
 
     for row_idx in range(1, MAX_ROWS+1):
         row   = t2.rows[row_idx]
@@ -948,7 +942,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     buffer = io.BytesIO()
     doc.save(buffer); buffer.seek(0)
 
-    # Save with chosen status
     fattura_id = save_fattura(
         invoice_number, company, grand_total, currency,
         address, zip_code, city, region, country,
@@ -957,7 +950,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         payment_terms=payment,
     )
 
-    # Override status if not default
     if fattura_id and status_choice != "not_sent":
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/fatture",
