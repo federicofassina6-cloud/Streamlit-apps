@@ -12,7 +12,6 @@ import requests
 st.set_page_config(page_title="Fattura Generator", layout="wide")
 
 def fmt_price(n):
-    """Format number as European: 2.470,– for whole numbers, 0,15 for decimals, -832,85 for negatives."""
     sign = "-" if n < 0 else ""
     abs_n = abs(n)
     formatted = f"{abs_n:,.2f}"
@@ -22,7 +21,6 @@ def fmt_price(n):
     return f"{sign}{formatted}"
 
 def fmt_qty(n):
-    """Format quantity with comma: 1,0"""
     return f"{n:.1f}".replace(".", ",")
 
 # ─────────────────────────────────────────────
@@ -218,6 +216,24 @@ def set_cell_text(cell, text, bold=False, italic=False, font_name="Verdana", fon
         run2.font.name = font_name; run2.font.size = Pt(font_size)
         run = run2
 
+def add_para_to_cell(cell, text, bold=False, font_name="Verdana", font_size=10):
+    """Append a fresh paragraph to a cell with explicit non-bold run."""
+    tc = cell._tc
+    new_p = OxmlElement("w:p")
+    tc.append(new_p)
+    para = cell.paragraphs[-1]
+    run = para.add_run(text)
+    run.bold = bold
+    run.font.name = font_name
+    run.font.size = Pt(font_size)
+    # Explicitly set bold=False in XML to override any inherited style
+    rPr = run._r.get_or_add_rPr()
+    b_elem = rPr.find(qn('w:b'))
+    if b_elem is None:
+        b_elem = OxmlElement('w:b')
+        rPr.insert(0, b_elem)
+    b_elem.set(qn('w:val'), '0')
+
 def replace_in_table_cell(cell, replacements):
     for para in cell.paragraphs:
         full_text = "".join(run.text for run in para.runs)
@@ -282,9 +298,6 @@ for cat in CATEGORIES:
         PRODUCT_MAP[len(PRODUCT_NAMES)] = p
         PRODUCT_NAMES.append(label)
 
-# ─────────────────────────────────────────────
-# OPTIONS
-# ─────────────────────────────────────────────
 CURRENCIES = ["EUR", "USD", "GBP", "CHF", "CNY", "RUB", "— custom —"]
 HS_CODES   = ["8453.9000","8453.1000","8466.9195","8464.2019","8451.9000","8451.8030","— custom —"]
 
@@ -295,14 +308,14 @@ if "fattura_line_items" not in st.session_state:
     st.session_state.fattura_line_items = [
         {"product_idx":0,"description":"","description_it":"","details":"","details_it":"",
          "qty":1.0,"unit_price":0.0,"price_type":"Cliente",
-         "is_discount":False,"discount_value":0.0,"linked_anticipo":None}
+         "is_discount":False,"is_vat":False,"discount_value":0.0,"linked_anticipo":None}
     ]
 
 def add_line():
     st.session_state.fattura_line_items.append(
         {"product_idx":0,"description":"","description_it":"","details":"","details_it":"",
          "qty":1.0,"unit_price":0.0,"price_type":"Cliente",
-         "is_discount":False,"discount_value":0.0,"linked_anticipo":None}
+         "is_discount":False,"is_vat":False,"discount_value":0.0,"linked_anticipo":None}
     )
 
 def add_discount_line():
@@ -311,7 +324,16 @@ def add_discount_line():
          "description":"DEDUCTION DOWN PAYMENT BY T/T",
          "description_it":"DEDUZIONE PER ANTICIPO A MEZZO BONIFICO BANCARIO",
          "details":"","details_it":"","qty":1.0,"unit_price":0.0,"price_type":"Cliente",
-         "is_discount":True,"discount_value":0.0,"linked_anticipo":None}
+         "is_discount":True,"is_vat":False,"discount_value":0.0,"linked_anticipo":None}
+    )
+
+def add_vat_line():
+    st.session_state.fattura_line_items.append(
+        {"product_idx":-2,
+         "description":"VAT 22%",
+         "description_it":"IVA 22%",
+         "details":"","details_it":"","qty":1.0,"unit_price":0.0,"price_type":"Cliente",
+         "is_discount":False,"is_vat":True,"discount_value":0.0,"linked_anticipo":None}
     )
 
 # ─────────────────────────────────────────────
@@ -344,7 +366,6 @@ with col_d3:
 
 formatted_date = selected_date.strftime('%d/%m/%Y')
 
-# ── NOTE ──
 note = st.text_input("📝 Note (optional — shown in the app)", placeholder="e.g. Spare parts order, urgent delivery")
 
 # ── 2. CLIENT ──
@@ -482,7 +503,7 @@ with col_pt:
     if st.session_state.get("_fattura_last_price_type") != global_price_type:
         st.session_state["_fattura_last_price_type"] = global_price_type
         for item in st.session_state.fattura_line_items:
-            if item.get("is_discount"): continue
+            if item.get("is_discount") or item.get("is_vat"): continue
             item["price_type"] = global_price_type
             if item.get("product_idx",0) > 0 and item.get("product_idx") in PRODUCT_MAP:
                 pc = item.get("price_client",0.0)
@@ -495,30 +516,44 @@ st.subheader("6. Line Items")
 st.caption("Select from catalogue or choose '— custom item —' to type manually.")
 
 EXTRA_ITEMS = [
-    ("Packing charges",
-     "Spese di imballaggio",
-     "Packing charges",
-     "Spese di imballaggio"),
-    ("Packing and shipping charges",
-     "Spese di imballaggio e spedizione",
-     "Packing and shipping charges",
-     "Spese di imballaggio e spedizione"),
-    ("Shipping charges",
-     "Spese di spedizione",
-     "Shipping charges",
-     "Spese di spedizione"),
+    ("Packing charges", "Spese di imballaggio", "Packing charges", "Spese di imballaggio"),
+    ("Packing and shipping charges", "Spese di imballaggio e spedizione", "Packing and shipping charges", "Spese di imballaggio e spedizione"),
+    ("Shipping charges", "Spese di spedizione", "Shipping charges", "Spese di spedizione"),
 ]
 EXTRA_ITEM_LABELS = [f"🇬🇧 {e[0]} / 🇮🇹 {e[1]}" for e in EXTRA_ITEMS]
 EXTRA_ITEM_OFFSET = len(PRODUCT_NAMES)
-
 ALL_ITEM_NAMES = PRODUCT_NAMES + EXTRA_ITEM_LABELS
 
 items_to_remove = []
 needs_rerun = False
 
+# Compute base subtotal (for live VAT preview) — excludes discount and vat lines
+base_subtotal_live = sum(
+    it["qty"] * it["unit_price"]
+    for it in st.session_state.fattura_line_items
+    if not it.get("is_discount") and not it.get("is_vat")
+)
+
 for i, item in enumerate(st.session_state.fattura_line_items):
 
     with st.container():
+
+        # ── VAT LINE ──────────────────────────────────────────────────
+        if item.get("is_vat"):
+            vat_amount = round(base_subtotal_live * 0.22, 2)
+            item["unit_price"] = vat_amount
+            item["qty"] = 1.0
+            label = "IVA 22%" if is_italian else "VAT 22%"
+            col_v1, col_v2 = st.columns([3, 0.4])
+            with col_v1:
+                st.markdown(f"**🧾 {label}**")
+                st.caption(f"22% of {currency} {fmt_price(base_subtotal_live)} = **{currency} {fmt_price(vat_amount)}**")
+            with col_v2:
+                st.write(""); st.write("")
+                if st.button("🗑", key=f"fattura_del_{i}"):
+                    items_to_remove.append(i)
+            st.divider()
+            continue
 
         # ── DISCOUNT LINE ──────────────────────────────────────────────
         if item.get("is_discount"):
@@ -561,8 +596,7 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     f"Discount Value ({currency}) — must be 0 or negative",
                     max_value=0.0,
                     value=float(item.get("discount_value", 0.0)),
-                    step=1.0,
-                    format="%.2f",
+                    step=1.0, format="%.2f",
                     key=f"disc_val_{i}"
                 )
                 item["discount_value"] = discount_val
@@ -613,7 +647,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                 st.session_state.pop(f"fattura_up_{i}", None)
                 needs_rerun = True
 
-            # Caption for catalogue items — language-aware
             if 0 < prod_idx < EXTRA_ITEM_OFFSET and prod_idx in PRODUCT_MAP:
                 if is_italian:
                     it_name = PRODUCT_MAP[prod_idx].get("description","")
@@ -622,12 +655,10 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     en_name = PRODUCT_MAP[prod_idx].get("description_eng","") or PRODUCT_MAP[prod_idx].get("description","")
                     if en_name: st.caption(f"🇬🇧 {en_name}")
 
-            # Caption for extra items — language-aware
             if prod_idx >= EXTRA_ITEM_OFFSET:
                 extra = EXTRA_ITEMS[prod_idx - EXTRA_ITEM_OFFSET]
                 st.caption(f"🇮🇹 {extra[1]}" if is_italian else f"🇬🇧 {extra[0]}")
 
-            # Custom item name — show only the relevant language field
             if prod_idx == 0:
                 if is_italian:
                     item["description_it"] = st.text_input(
@@ -640,7 +671,6 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                         value=item.get("description", ""),
                         key=f"fattura_desc_{i}")
 
-            # Specs / details — show only the relevant language field
             if is_italian:
                 item["details_it"] = st.text_input(
                     "Descrizione / Specifiche IT (optional)",
@@ -671,15 +701,9 @@ for i, item in enumerate(st.session_state.fattura_line_items):
                     diff_pct = ((entered - db_price) / db_price) * 100
                     diff_abs = entered - db_price
                     if entered < db_price:
-                        st.caption(
-                            f"🔴 Discount: −{currency} {fmt_price(abs(diff_abs))} "
-                            f"({abs(diff_pct):.1f}% below list price of {currency} {fmt_price(db_price)})"
-                        )
+                        st.caption(f"🔴 Discount: −{currency} {fmt_price(abs(diff_abs))} ({abs(diff_pct):.1f}% below list price of {currency} {fmt_price(db_price)})")
                     else:
-                        st.caption(
-                            f"🟢 Surcharge: +{currency} {fmt_price(diff_abs)} "
-                            f"({diff_pct:.1f}% above list price of {currency} {fmt_price(db_price)})"
-                        )
+                        st.caption(f"🟢 Surcharge: +{currency} {fmt_price(diff_abs)} ({diff_pct:.1f}% above list price of {currency} {fmt_price(db_price)})")
 
         with c2:
             item["qty"] = st.number_input("Qty", min_value=0.0, value=float(item.get("qty",1.0)),
@@ -693,8 +717,7 @@ for i, item in enumerate(st.session_state.fattura_line_items):
             if st.button("🗑", key=f"fattura_del_{i}"):
                 items_to_remove.append(i)
 
-        line_total = item["qty"] * item["unit_price"]
-        st.caption(f"Line total: {currency} {fmt_price(line_total)}")
+        st.caption(f"Line total: {currency} {fmt_price(item['qty'] * item['unit_price'])}")
         st.divider()
 
 for i in sorted(items_to_remove, reverse=True):
@@ -702,21 +725,38 @@ for i in sorted(items_to_remove, reverse=True):
 if items_to_remove or needs_rerun:
     st.rerun()
 
-col_btn1, col_btn2 = st.columns(2)
+# ── Add line buttons ──
+col_btn1, col_btn2, col_btn3 = st.columns(3)
 with col_btn1:
     st.button("➕ Add Line Item", on_click=add_line)
 with col_btn2:
-    if st.button("➕ Add Discount / Sconto"):
+    if st.button("➕ Add Deduction / Deduzione"):
         st.session_state.fatture_anticipo_db = load_fatture_anticipo()
         add_discount_line()
         st.rerun()
+with col_btn3:
+    # Only allow one VAT line
+    has_vat = any(it.get("is_vat") for it in st.session_state.fattura_line_items)
+    if not has_vat:
+        if st.button("➕ Add VAT 22% / IVA 22%"):
+            add_vat_line()
+            st.rerun()
+    else:
+        st.caption("VAT 22% already added")
 
-items_total    = sum(it["qty"] * it["unit_price"] for it in st.session_state.fattura_line_items if not it.get("is_discount"))
+# ── Totals ──
+items_total    = sum(it["qty"] * it["unit_price"] for it in st.session_state.fattura_line_items if not it.get("is_discount") and not it.get("is_vat"))
 discount_total = sum(it.get("discount_value", 0.0) for it in st.session_state.fattura_line_items if it.get("is_discount"))
-grand_total    = items_total + discount_total
+vat_total      = sum(it["unit_price"] for it in st.session_state.fattura_line_items if it.get("is_vat"))
+grand_total    = items_total + discount_total + vat_total
 st.markdown(f"### 💰 Total: {currency} {fmt_price(grand_total)}")
-if discount_total < 0:
-    st.caption(f"Subtotal: {currency} {fmt_price(items_total)} | Discount: {currency} {fmt_price(discount_total)}")
+if discount_total < 0 or vat_total > 0:
+    breakdown = f"Subtotal: {currency} {fmt_price(items_total)}"
+    if vat_total > 0:
+        breakdown += f" | VAT 22%: {currency} {fmt_price(vat_total)}"
+    if discount_total < 0:
+        breakdown += f" | Deduction: {currency} {fmt_price(discount_total)}"
+    st.caption(breakdown)
 
 # ── 7. STATUS ──
 st.subheader("7. Invoice Status")
@@ -766,7 +806,6 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     zip_city = f"{zip_code} {city}".strip()
     if region: zip_city += f", {region}"
 
-    # Choose template based on language
     template_filename = "fattura_template_ita.docx" if is_italian else "fattura_template.docx"
     try:
         template_path = os.path.join(os.path.dirname(__file__), template_filename)
@@ -786,9 +825,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
 
     for para in doc.paragraphs:
         full = "".join(r.text for r in para.runs)
-        if full.strip() in ["","Messrs."]:
-            pass
-        else:
+        if full.strip() not in ["","Messrs."]:
             for run in para.runs:
                 if run.text.strip():
                     run.bold = False; run.font.name="Verdana"; run.font.size=Pt(10)
@@ -815,7 +852,8 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     if status_choice == "Fattura di anticipo":
         if is_italian:
             table0_replacements["FATTURA No.:"]  = "FATTURA DI ANTICIPO Nr.:"
-            table0_replacements["FATTURA Nr.:"]   = "FATTURA DI ANTICIPO Nr.:"
+            table0_replacements["FATTURA Nr.:"]  = "FATTURA DI ANTICIPO Nr.:"
+            table0_replacements["FATTURA N.:"]   = "FATTURA DI ANTICIPO Nr.:"
         else:
             table0_replacements["INVOICE No.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
             table0_replacements["INVOICE NO.:"]  = "INVOICE FOR ADVANCE PAYMENT No.:"
@@ -831,15 +869,10 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
 
     # ── Table 1: Payment, bank, delivery ──
     t1 = doc.tables[1]
-    if is_italian:
-        payment_label = f"PAGAMENTO:\n{payment}"
-        delivery_section_label = "INDIRIZZO DI CONSEGNA DELLA MERCE:"
-    else:
-        payment_label = f"PAYMENT TERMS:\n{payment}"
-        delivery_section_label = "DELIVERY PLACE OF THE GOODS:"
+    payment_label = f"PAGAMENTO:\n{payment}" if is_italian else f"PAYMENT TERMS:\n{payment}"
+    delivery_section_label = "INDIRIZZO DI CONSEGNA DELLA MERCE:" if is_italian else "DELIVERY PLACE OF THE GOODS:"
 
-    set_cell_text(t1.rows[0].cells[0], payment_label,
-                  bold=False, font_name="Verdana", font_size=10)
+    set_cell_text(t1.rows[0].cells[0], payment_label, bold=False, font_name="Verdana", font_size=10)
     del_city_region = f"{del_zip} {del_city}".strip()
     if del_region: del_city_region += f", {del_region}"
     del_lines = [delivery_section_label]
@@ -847,14 +880,21 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
     if del_address: del_lines.append(del_address)
     if del_city_region: del_lines.append(del_city_region)
     if del_country: del_lines.append(del_country)
-    set_cell_text(t1.rows[2].cells[0], "\n".join(del_lines),
-                  bold=False, font_name="Verdana", font_size=10)
+    set_cell_text(t1.rows[2].cells[0], "\n".join(del_lines), bold=False, font_name="Verdana", font_size=10)
 
     # ── Table 2: Products ──
     t2 = doc.tables[2]
     MAX_ROWS = 15
+
+    # Compute base subtotal for VAT calculation at doc generation time
+    base_subtotal_doc = sum(
+        it["qty"] * it["unit_price"]
+        for it in st.session_state.fattura_line_items
+        if not it.get("is_discount") and not it.get("is_vat")
+    )
+
     valid_items = [it for it in st.session_state.fattura_line_items
-                   if it.get("description","").strip() or it.get("description_it","").strip()]
+                   if it.get("description","").strip() or it.get("description_it","").strip() or it.get("is_vat")]
 
     for row_idx in range(1, MAX_ROWS+1):
         row   = t2.rows[row_idx]
@@ -863,8 +903,8 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
         if row_idx-1 < len(valid_items):
             item = valid_items[row_idx-1]
             is_disc = item.get("is_discount", False)
+            is_vat_line = item.get("is_vat", False)
 
-            # Pick description and details based on language
             if is_italian:
                 desc_text    = item.get("description_it","") or item.get("description","")
                 details_text = item.get("details_it","").strip() or item.get("details","").strip()
@@ -872,49 +912,49 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                 desc_text    = item.get("description","")
                 details_text = item.get("details","").strip()
 
-            if is_disc:
-                disc_val  = item.get("discount_value", 0.0)
+            if is_vat_line:
+                # VAT line — description + computed amount
+                vat_doc_amount = round(base_subtotal_doc * 0.22, 2)
                 set_cell_text(cells[0], "", bold=False)
+                set_cell_text(cells[1], desc_text, bold=False, font_name="Verdana", font_size=10)
+                set_cell_text(cells[2], "", bold=False)
+                set_cell_text(cells[3], "", bold=False)
+                set_cell_text(cells[4], currency, bold=False)
+                set_cell_text(cells[5], fmt_price(vat_doc_amount), bold=False)
+
+            elif is_disc:
+                disc_val = item.get("discount_value", 0.0)
+                set_cell_text(cells[0], "", bold=False)
+                # Description cell: first line (main description) bold=False
                 desc_cell = cells[1]
                 for para in desc_cell.paragraphs:
                     for run in para.runs: run.text=""
                 fp = desc_cell.paragraphs[0]
-                r_en = fp.add_run(desc_text)
-                r_en.bold=False; r_en.font.name="Verdana"; r_en.font.size=Pt(10)
+                r_main = fp.add_run(desc_text)
+                r_main.bold=False; r_main.font.name="Verdana"; r_main.font.size=Pt(10)
+                # Details line: use fresh paragraph helper to guarantee non-bold
                 if details_text:
-                    np2 = copy.deepcopy(fp._p)
-                    desc_cell._tc.append(np2)
-                    det_para = desc_cell.paragraphs[-1]
-                    for run in det_para.runs: run.text=""
-                    r_det = det_para.add_run(details_text)
-                    r_det.bold=False; r_det.font.name="Verdana"; r_det.font.size=Pt(10)
+                    add_para_to_cell(cells[1], details_text, bold=False)
                 set_cell_text(cells[2], "", bold=False)
                 set_cell_text(cells[3], "", bold=False)
                 set_cell_text(cells[4], currency, bold=False)
                 set_cell_text(cells[5], fmt_price(disc_val), bold=False)
+
             else:
                 line_total = item["qty"] * item["unit_price"]
-                qty_str    = fmt_qty(item["qty"])
-                price_str  = fmt_price(item["unit_price"])
-                total_str  = fmt_price(line_total)
-                set_cell_text(cells[0], qty_str, bold=False)
+                set_cell_text(cells[0], fmt_qty(item["qty"]), bold=False)
                 desc_cell = cells[1]
                 for para in desc_cell.paragraphs:
                     for run in para.runs: run.text=""
-                first_para = desc_cell.paragraphs[0]
-                r_en = first_para.add_run(desc_text)
-                r_en.bold=False; r_en.font.name="Verdana"; r_en.font.size=Pt(10)
+                fp = desc_cell.paragraphs[0]
+                r_main = fp.add_run(desc_text)
+                r_main.bold=False; r_main.font.name="Verdana"; r_main.font.size=Pt(10)
                 if details_text:
-                    new_p2 = copy.deepcopy(first_para._p)
-                    desc_cell._tc.append(new_p2)
-                    det_para = desc_cell.paragraphs[-1]
-                    for run in det_para.runs: run.text=""
-                    r_det = det_para.add_run(details_text)
-                    r_det.bold=False; r_det.font.name="Verdana"; r_det.font.size=Pt(10)
+                    add_para_to_cell(cells[1], details_text, bold=False)
                 set_cell_text(cells[2], currency, bold=False)
-                set_cell_text(cells[3], price_str, bold=False)
+                set_cell_text(cells[3], fmt_price(item["unit_price"]), bold=False)
                 set_cell_text(cells[4], currency, bold=False)
-                set_cell_text(cells[5], total_str, bold=False)
+                set_cell_text(cells[5], fmt_price(line_total), bold=False)
         else:
             for cell in cells: set_cell_text(cell,"")
             trPr = row._tr.find(qn('w:trPr'))
