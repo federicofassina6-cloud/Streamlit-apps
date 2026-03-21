@@ -931,7 +931,7 @@ if st.button("📥 Generate Fattura", type="primary", use_container_width=True):
                     for run in para.runs: run.text=""
                 fp = desc_cell.paragraphs[0]
                 r_main = fp.add_run(desc_text)
-                r_main.bold=False; r_main.font.name="Verdana"; r_main.font.size=Pt(10)
+                r_main.bold=True; r_main.font.name="Verdana"; r_main.font.size=Pt(10)
                 # Details line: use fresh paragraph helper to guarantee non-bold
                 if details_text:
                     add_para_to_cell(cells[1], details_text, bold=False)
